@@ -312,7 +312,7 @@ table.record-table td.actions{white-space:nowrap;width:1%;}
     <nav class="module-list" id="moduleList"></nav>
     <div class="sidebar-footer">
       <button class="btn-library" id="openLibraryBtn">+ Library</button>
-      <button class="btn-library" id="openConnectionsBtn" style="margin-top:6px;">⚙ Connections</button>
+      <button class="btn-library" id="openConnectionsBtn" style="margin-top:6px;">⚙ Settings</button>
     </div>
   </aside>
 
@@ -400,7 +400,8 @@ const ALL_TEMPLATES = STARTER_TEMPLATES.concat(MEDICAL_TEMPLATES);
 
 function seedState(){
   const s = { modules: [], records: {}, view: {type:'home'},
-    settings: { anthropicKey:'', googleClientId:'', googleApiKey:'', spreadsheetId:'' } };
+    settings: { anthropicKey:'', googleClientId:'', googleApiKey:'', spreadsheetId:'',
+      exportSchedule:'manual', lastExportedAt:null } };
   const seedFrom = (name, tplName) => {
     const tpl = STARTER_TEMPLATES.find(t => t.name === tplName);
     const mod = instantiateModule(s, tpl, name);
@@ -432,7 +433,8 @@ function loadState(){
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      if (!s.settings) s.settings = { anthropicKey:'', googleClientId:'', googleApiKey:'', spreadsheetId:'' };
+      const defaults = { anthropicKey:'', googleClientId:'', googleApiKey:'', spreadsheetId:'', exportSchedule:'manual', lastExportedAt:null };
+      s.settings = Object.assign({}, defaults, s.settings || {});
       return s;
     }
   } catch(e){ console.warn('Could not read saved data', e); }
@@ -1463,7 +1465,8 @@ function buildRecordFooter(mod, rec, draft){
 let googleRt = { tokenClient: null, accessToken: null, connected: false, initPending: false };
 
 function openConnectionsModal(){
-  openModal('Connections', (body) => {
+  openModal('Settings', (body) => {
+    body.appendChild(el('div', 'tpl-group-label', 'Connections'));
     body.appendChild(el('div', 'field-hint',
       'Your keys are stored only in this browser, on this device, and used only for the direct calls this app makes to Anthropic\'s and Google\'s own APIs. Nothing routes through a server of ours.'));
 
@@ -1507,7 +1510,120 @@ function openConnectionsModal(){
     });
     connectBtn.style.marginTop = '8px';
     body.appendChild(connectBtn);
+
+    body.appendChild(el('div', 'tpl-group-label', 'Backup & transfer'));
+    body.appendChild(el('div', 'field-hint',
+      'A backup file has everything in this app — every module and record — except your keys above, which stay on this device. Move the file however you\'d move any file between your phone and laptop; Import reads one back in.'));
+
+    const lastRow = el('div', 'field-hint'); lastRow.id = 'lastExportedRow'; lastRow.style.marginTop = '10px';
+    lastRow.textContent = 'Last exported: ' + formatLastExported();
+    body.appendChild(lastRow);
+
+    const schedGrp = el('div', 'field-group'); schedGrp.style.marginTop = '8px';
+    schedGrp.appendChild(el('label', 'field-label', 'Export'));
+    const schedSelect = document.createElement('select');
+    [['manual','Manual — I\'ll export myself'], ['daily','Daily — automatically, next time I open the app'], ['weekly','Weekly — automatically, next time I open the app']].forEach(([val,label]) => {
+      const o = document.createElement('option'); o.value = val; o.textContent = label;
+      if ((state.settings.exportSchedule || 'manual') === val) o.selected = true;
+      schedSelect.appendChild(o);
+    });
+    schedSelect.onchange = () => { state.settings.exportSchedule = schedSelect.value; saveState(); };
+    schedGrp.appendChild(schedSelect);
+    body.appendChild(schedGrp);
+
+    const btnRow = el('div', ''); btnRow.style.display = 'flex'; btnRow.style.gap = '8px'; btnRow.style.marginTop = '8px';
+    const exportBtn = buttonEl('Export now', 'btn-secondary', () => {
+      triggerExportDownload(false);
+      lastRow.textContent = 'Last exported: ' + formatLastExported();
+    });
+    const importBtn = buttonEl('Import from file…', 'btn-secondary', () => openImportPicker(() => {
+      lastRow.textContent = 'Last exported: ' + formatLastExported();
+    }));
+    btnRow.appendChild(exportBtn); btnRow.appendChild(importBtn);
+    body.appendChild(btnRow);
   }, [ buttonEl('Done', 'btn-primary', closeModal) ]);
+}
+
+function formatLastExported(){
+  const ts = state.settings.lastExportedAt;
+  if (!ts) return 'never';
+  return formatDateTime(ts);
+}
+
+function buildExportPayload(){
+  // Deliberately excludes `settings` entirely — API keys and this device's
+  // export schedule stay device-specific, never travel in a portable file.
+  return JSON.stringify({
+    appVersion: 'task-catcher-v1',
+    exportedAt: Date.now(),
+    modules: state.modules,
+    records: state.records,
+  }, null, 2);
+}
+
+function triggerExportDownload(auto){
+  const payload = buildExportPayload();
+  const blob = new Blob([payload], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'task-catcher-backup-' + dateStr + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  state.settings.lastExportedAt = Date.now();
+  saveState();
+  showToast(auto ? 'Backup exported automatically.' : 'Backup exported.');
+}
+
+function openImportPicker(onDone){
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'application/json,.json';
+  input.onchange = async () => {
+    const file = input.files[0]; if (!file) return;
+    let parsed;
+    try {
+      const text = await file.text();
+      parsed = JSON.parse(text);
+      if (!parsed || !Array.isArray(parsed.modules) || typeof parsed.records !== 'object') throw new Error('not a Task Catcher backup file');
+    } catch(e){
+      alert('Couldn\'t read that file as a Task Catcher backup (' + e.message + ').');
+      return;
+    }
+    const ok = await confirmModal('This replaces <strong>everything</strong> currently in Task Catcher — ' +
+      state.modules.length + ' module' + (state.modules.length===1?'':'s') + ' — with what\'s in this file (from ' +
+      (parsed.exportedAt ? formatDateTime(parsed.exportedAt) : 'an unknown time') + '). This can\'t be undone. Continue?');
+    if (!ok) return;
+    state.modules = parsed.modules;
+    state.records = parsed.records;
+    saveState();
+    render();
+    showToast('Import complete.');
+    if (onDone) onDone();
+  };
+  input.click();
+}
+
+/* Checked once at startup: if a schedule is set and enough time has
+   passed since the last export, export right now, quietly. Never prompts
+   — the whole point of choosing a schedule over Manual is not having to
+   decide each time. */
+function checkScheduledExport(){
+  const sched = state.settings.exportSchedule;
+  if (!sched || sched === 'manual') return;
+  const intervalMs = sched === 'daily' ? 24*60*60*1000 : 7*24*60*60*1000;
+  const last = state.settings.lastExportedAt || 0;
+  if (Date.now() - last >= intervalMs) triggerExportDownload(true);
+}
+
+function showToast(text){
+  const t = document.createElement('div');
+  t.textContent = text;
+  t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
+    'background:var(--ink);color:var(--panel);padding:9px 16px;border-radius:20px;font-size:12.5px;' +
+    'box-shadow:0 8px 24px rgba(0,0,0,0.2);z-index:200;opacity:0;transition:opacity .2s;';
+  document.body.appendChild(t);
+  requestAnimationFrame(() => { t.style.opacity = '1'; });
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 250); }, 3000);
 }
 
 function tryInitGoogle(promptSignIn, onConnected, onFailed, _attempt){
@@ -1797,6 +1913,10 @@ function formatDateTime(ts){
    Init
    ========================================================= */
 render();
+checkScheduledExport();
+if (navigator.storage && navigator.storage.persist){
+  navigator.storage.persist().catch(() => {}); // best-effort; doesn't guard against a deliberate "clear site data"
+}
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
