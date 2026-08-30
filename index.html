@@ -345,6 +345,7 @@ const SHAPES = {
   notes:     { label: 'Freeform notes', hint: 'Long-form entries. No custom fields needed — the built-in notes field is the content.' },
   checklist: { label: 'Checklist', hint: 'Simple done / not-done items.' },
   event:     { label: 'Dated / scheduled', hint: 'Things with a date — e.g. Appointments. Include one Date field.' },
+  files:     { label: 'File / photo', hint: 'One uploaded file or photo per record — e.g. a scanned insurance card. Stored on this device (not Drive), and travels with your Backup export.' },
 };
 
 /* Per-shape sync-target compatibility. 'ok' offers the target with no
@@ -356,6 +357,7 @@ const SYNC_RULES = {
   notes:     { sheets:'warn',  docx:'ok',     calendar:'refuse' },
   checklist: { sheets:'warn',  docx:'refuse', calendar:'refuse' },
   event:     { sheets:'warn',  docx:'refuse', calendar:'ok' },
+  files:     { sheets:'refuse',docx:'refuse', calendar:'refuse' },
 };
 const SYNC_WARN_MESSAGES = {
   'table|docx':     'This will flatten each record into a plain paragraph in the document — table structure won’t carry over. Sync anyway?',
@@ -379,6 +381,7 @@ const STARTER_TEMPLATES = [
   { group:'Starters', name:'Unanswered Questions', shape:'checklist', role:'unanswered',
     fields:[ {id:'question',label:'Question',type:'text'}, {id:'askedOf',label:'Asked of',type:'text'},
              {id:'status',label:'Status',type:'select',options:['Open','Resolved']} ] },
+  { group:'Starters', name:'Files & Photos', shape:'files', fields:[ {id:'title',label:'Title',type:'text'} ] },
 ];
 const MEDICAL_TEMPLATES = [
   { group:'Medical', name:'Doctors', shape:'table',
@@ -443,6 +446,75 @@ function loadState(){
 function saveState(){
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   catch(e){ console.warn('Could not save data', e); }
+}
+
+/* ---------- File storage (IndexedDB) ----------
+   File/photo bytes never go through localStorage — its quota is a few MB,
+   fine for text and short tables, not for photos (same reasoning PM's own
+   design doc gives for staying Sheets-links-only). IndexedDB has real
+   room. Only `state` (module/record metadata, including which IDB key a
+   record's attachment lives under) persists in localStorage; the bytes
+   themselves live here, and travel separately through Backup export as
+   base64, not through localStorage at all. */
+const IDB_NAME = 'tc_files_v1';
+const IDB_STORE = 'blobs';
+let idbOpenPromise = null;
+function openIdb(){
+  if (idbOpenPromise) return idbOpenPromise;
+  idbOpenPromise = new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)){ reject(new Error('This browser doesn\'t support local file storage.')); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore(IDB_STORE, { keyPath: 'id' }); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return idbOpenPromise;
+}
+async function idbPutBlob(id, blob, name, mimeType){
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put({ id, blob, name, mimeType });
+    tx.oncomplete = () => resolve(id);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGetBlob(id){
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbDeleteBlob(id){
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+function blobToBase64(blob){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(base64, mimeType){
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mimeType });
+}
+function humanFileSize(bytes){
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return Math.round(bytes/1024) + ' KB';
+  return (bytes/(1024*1024)).toFixed(1) + ' MB';
 }
 
 function getModule(id){ return state.modules.find(m => m.id === id); }
@@ -794,9 +866,41 @@ function renderModule(moduleId){
     mainArea.appendChild(renderNotesView(mod, records));
   } else if (mod.shape === 'event'){
     mainArea.appendChild(renderTableView(mod, records, true));
+  } else if (mod.shape === 'files'){
+    mainArea.appendChild(renderFilesView(mod, records));
   } else {
     mainArea.appendChild(renderTableView(mod, records, false));
   }
+}
+
+function renderFilesView(mod, records){
+  const grid = el('div', '');
+  grid.style.display = 'grid'; grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(150px, 1fr))'; grid.style.gap = '12px';
+  records.slice().sort((a,b) => b.updatedAt - a.updatedAt).forEach(rec => {
+    const card = el('div', 'record-card');
+    card.style.cursor = 'pointer'; card.style.textAlign = 'center';
+    card.onclick = () => openRecordModal(mod, rec);
+    const thumbWrap = el('div', ''); thumbWrap.style.height = '90px'; thumbWrap.style.display = 'flex';
+    thumbWrap.style.alignItems = 'center'; thumbWrap.style.justifyContent = 'center';
+    thumbWrap.style.background = 'var(--surface-sunk)'; thumbWrap.style.borderRadius = '8px'; thumbWrap.style.marginBottom = '8px';
+    thumbWrap.style.fontSize = '32px';
+    thumbWrap.textContent = rec.attachment && (rec.attachment.mimeType || '').startsWith('image/') ? '' : (rec.attachment ? '📎' : '—');
+    card.appendChild(thumbWrap);
+    card.appendChild(el('div', 'record-card-title', recordTitle(mod, rec)));
+    if (rec.attachment) card.appendChild(el('div', 'record-card-meta', rec.attachment.name));
+    grid.appendChild(card);
+    if (rec.attachment && (rec.attachment.mimeType || '').startsWith('image/')){
+      idbGetBlob(rec.attachment.idbKey).then(stored => {
+        if (!stored) return;
+        const img = document.createElement('img');
+        img.style.maxHeight = '100%'; img.style.maxWidth = '100%'; img.style.borderRadius = '6px'; img.style.objectFit = 'cover';
+        img.src = URL.createObjectURL(stored.blob);
+        thumbWrap.textContent = ''; thumbWrap.appendChild(img);
+      }).catch(() => {});
+    }
+  });
+  if (!records.length) return el('div', 'empty', 'No files yet.');
+  return grid;
 }
 
 function renderChecklistView(mod, records){
@@ -1062,7 +1166,7 @@ async function proposeModuleFromAI(description){
   const moduleNames = state.modules.map(m => m.name);
   const system = [
     'You are helping someone design a new module (a record type) for Task Catcher, a personal organizer app.',
-    'A module has a name, a "shape" (table = repeating rows of similar records; notes = freeform long-form entries with no custom fields; checklist = simple done/not-done items; event = things with a date), and a list of fields.',
+    'A module has a name, a "shape" (table = repeating rows of similar records; notes = freeform long-form entries with no custom fields; checklist = simple done/not-done items; event = things with a date; files = one uploaded file/photo per record, e.g. scanned documents), and a list of fields.',
     'Available field types: ' + AI_FIELD_TYPE_NAMES + '.',
     'Existing modules the person already has, that new fields can link to if it genuinely makes sense: ' + (moduleNames.length ? moduleNames.join(', ') : '(none yet)') + '.',
     'Only propose a link-one/link-many field when it clearly matches one of those existing module names — otherwise just use a plain text field instead.',
@@ -1285,6 +1389,9 @@ function buildSchemaFooter(mod, isEdit){
       }
       const ok = await confirmModal(msg);
       if (!ok) return;
+      if (mod.shape === 'files'){
+        for (const r of recs) if (r.attachment) await idbDeleteBlob(r.attachment.idbKey).catch(() => {});
+      }
       state.modules = state.modules.filter(m => m.id !== mod.id);
       delete state.records[mod.id];
       closeModal();
@@ -1313,11 +1420,70 @@ function buildSchemaFooter(mod, isEdit){
 }
 
 /* ---------- Record modal ---------- */
+/* The file-upload field for a 'files'-shape record. Structural, like the
+   built-in Notes field — not a configurable schema field, every record of
+   this shape has exactly one. Nothing is written to IndexedDB until Save;
+   picking a file here just stages it in `draft`. */
+function buildAttachmentField(draft){
+  const grp = el('div', 'field-group');
+  grp.appendChild(el('label', 'field-label', 'File / photo'));
+  const box = el('div', '');
+  box.style.border = '1px solid var(--line-strong)'; box.style.borderRadius = '8px'; box.style.padding = '10px';
+
+  function renderBox(){
+    box.innerHTML = '';
+    const hasCurrent = draft.attachment && !draft.removeAttachment;
+    const hasPending = !!draft.pendingFile;
+    if (hasPending){
+      const row = el('div', ''); row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '10px';
+      row.appendChild(el('div', '', '📎 ' + draft.pendingFile.name + ' (' + humanFileSize(draft.pendingFile.size) + ') — will be saved'));
+      box.appendChild(row);
+    } else if (hasCurrent){
+      const row = el('div', ''); row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '10px';
+      const isImg = (draft.attachment.mimeType || '').startsWith('image/');
+      row.appendChild(el('div', '', (isImg ? '🖼️ ' : '📎 ') + draft.attachment.name + ' (' + humanFileSize(draft.attachment.size) + ')'));
+      const openBtn = buttonEl('Open', 'btn-text', async () => {
+        const rec2 = await idbGetBlob(draft.attachment.idbKey);
+        if (!rec2){ alert('Couldn\'t find this file locally — it may not have finished saving.'); return; }
+        const url = URL.createObjectURL(rec2.blob);
+        window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      });
+      row.appendChild(openBtn);
+      const rmBtn = buttonEl('Remove', 'btn-text', () => { draft.removeAttachment = true; renderBox(); });
+      row.appendChild(rmBtn);
+      box.appendChild(row);
+    } else {
+      box.appendChild(el('div', 'field-hint', 'No file attached yet.'));
+    }
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file'; fileInput.style.marginTop = '8px';
+    fileInput.onchange = () => {
+      const f = fileInput.files[0]; if (!f) return;
+      draft.pendingFile = f; draft.removeAttachment = false;
+      renderBox();
+    };
+    box.appendChild(fileInput);
+  }
+  renderBox();
+  grp.appendChild(box);
+  return grp;
+}
+
 function openRecordModal(mod, rec){
   const isEdit = !!rec;
-  const draft = { fields: isEdit ? Object.assign({}, rec.fields) : {}, notes: isEdit ? rec.notes : '' };
+  const draft = {
+    fields: isEdit ? Object.assign({}, rec.fields) : {},
+    notes: isEdit ? rec.notes : '',
+    attachment: isEdit ? rec.attachment : null, // existing attachment metadata, unchanged unless replaced/removed below
+    pendingFile: null,      // a newly chosen File, not yet written to IndexedDB
+    removeAttachment: false,
+  };
 
   openModal(isEdit ? ('Edit — ' + mod.name) : ('Add to ' + mod.name), (body) => {
+    if (mod.shape === 'files'){
+      body.appendChild(buildAttachmentField(draft));
+    }
     mod.fields.forEach(f => {
       const grp = el('div', 'field-group');
       grp.appendChild(el('label', 'field-label', f.label));
@@ -1439,19 +1605,38 @@ function buildRecordFooter(mod, rec, draft){
         : 'Delete this record? This can’t be undone.';
       const ok = await confirmModal(msg);
       if (!ok) return;
+      if (rec.attachment) await idbDeleteBlob(rec.attachment.idbKey).catch(() => {});
       state.records[mod.id] = moduleRecords(mod.id).filter(r => r.id !== rec.id);
       closeModal(); render();
     }));
   }
   buttons.push(buttonEl('Cancel', 'btn-secondary', closeModal));
-  buttons.push(buttonEl(rec ? 'Save' : 'Add', 'btn-primary', () => {
-    if (rec){
-      rec.fields = draft.fields; rec.notes = draft.notes; rec.updatedAt = Date.now();
-    } else {
-      state.records[mod.id].push({ id: uid('r'), fields: draft.fields, notes: draft.notes, createdAt: Date.now(), updatedAt: Date.now() });
+  const saveBtn = buttonEl(rec ? 'Save' : 'Add', 'btn-primary', async () => {
+    saveBtn.disabled = true;
+    try {
+      let attachment = draft.attachment;
+      if (draft.pendingFile){
+        // A new file replaces whatever was there before — clean up the old one.
+        if (attachment) await idbDeleteBlob(attachment.idbKey).catch(() => {});
+        const idbKey = uid('file');
+        await idbPutBlob(idbKey, draft.pendingFile, draft.pendingFile.name, draft.pendingFile.type);
+        attachment = { idbKey, name: draft.pendingFile.name, mimeType: draft.pendingFile.type, size: draft.pendingFile.size };
+      } else if (draft.removeAttachment && attachment){
+        await idbDeleteBlob(attachment.idbKey).catch(() => {});
+        attachment = null;
+      }
+      if (rec){
+        rec.fields = draft.fields; rec.notes = draft.notes; rec.attachment = attachment; rec.updatedAt = Date.now();
+      } else {
+        state.records[mod.id].push({ id: uid('r'), fields: draft.fields, notes: draft.notes, attachment, createdAt: Date.now(), updatedAt: Date.now() });
+      }
+      closeModal(); render();
+    } catch(err){
+      saveBtn.disabled = false;
+      alert('Couldn\'t save the file (' + err.message + '). Everything else is unsaved too — try again.');
     }
-    closeModal(); render();
-  }));
+  });
+  buttons.push(saveBtn);
   return buttons;
 }
 
@@ -1513,7 +1698,7 @@ function openConnectionsModal(){
 
     body.appendChild(el('div', 'tpl-group-label', 'Backup & transfer'));
     body.appendChild(el('div', 'field-hint',
-      'A backup file has everything in this app — every module and record — except your keys above, which stay on this device. Move the file however you\'d move any file between your phone and laptop; Import reads one back in.'));
+      'A backup file has everything in this app — every module and record, including files/photos — except your keys above, which stay on this device. Move the file however you\'d move any file between your phone and laptop; Import reads one back in. Lots of large photos means a large backup file — no compression here, just a plain honest tradeoff.'));
 
     const lastRow = el('div', 'field-hint'); lastRow.id = 'lastExportedRow'; lastRow.style.marginTop = '10px';
     lastRow.textContent = 'Last exported: ' + formatLastExported();
@@ -1532,8 +1717,10 @@ function openConnectionsModal(){
     body.appendChild(schedGrp);
 
     const btnRow = el('div', ''); btnRow.style.display = 'flex'; btnRow.style.gap = '8px'; btnRow.style.marginTop = '8px';
-    const exportBtn = buttonEl('Export now', 'btn-secondary', () => {
-      triggerExportDownload(false);
+    const exportBtn = buttonEl('Export now', 'btn-secondary', async () => {
+      exportBtn.disabled = true; exportBtn.textContent = 'Exporting…';
+      await triggerExportDownload(false);
+      exportBtn.disabled = false; exportBtn.textContent = 'Export now';
       lastRow.textContent = 'Last exported: ' + formatLastExported();
     });
     const importBtn = buttonEl('Import from file…', 'btn-secondary', () => openImportPicker(() => {
@@ -1550,19 +1737,33 @@ function formatLastExported(){
   return formatDateTime(ts);
 }
 
-function buildExportPayload(){
+async function buildExportPayload(){
   // Deliberately excludes `settings` entirely — API keys and this device's
   // export schedule stay device-specific, never travel in a portable file.
+  // File/photo attachments live in IndexedDB, not `state` — pull each one
+  // in and base64-embed it so a single file is still the whole backup.
+  // Known tradeoff, not hidden: lots of large photos means a large export
+  // file. No attempt at compression or splitting into multiple files here.
+  const modules = JSON.parse(JSON.stringify(state.modules));
+  const records = JSON.parse(JSON.stringify(state.records));
+  for (const mod of modules){
+    if (mod.shape !== 'files') continue;
+    for (const rec of (records[mod.id] || [])){
+      if (!rec.attachment) continue;
+      const stored = await idbGetBlob(rec.attachment.idbKey);
+      if (stored) rec.attachment.data = await blobToBase64(stored.blob);
+    }
+  }
   return JSON.stringify({
     appVersion: 'task-catcher-v1',
     exportedAt: Date.now(),
-    modules: state.modules,
-    records: state.records,
+    modules,
+    records,
   }, null, 2);
 }
 
-function triggerExportDownload(auto){
-  const payload = buildExportPayload();
+async function triggerExportDownload(auto){
+  const payload = await buildExportPayload();
   const blob = new Blob([payload], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const dateStr = new Date().toISOString().slice(0, 10);
@@ -1593,6 +1794,20 @@ function openImportPicker(onDone){
       state.modules.length + ' module' + (state.modules.length===1?'':'s') + ' — with what\'s in this file (from ' +
       (parsed.exportedAt ? formatDateTime(parsed.exportedAt) : 'an unknown time') + '). This can\'t be undone. Continue?');
     if (!ok) return;
+    // Attachments carry as base64 inside the file; re-store each one into
+    // this device's IndexedDB under a fresh key (never trust an imported
+    // key to still be free) before dropping the metadata into state.
+    for (const mod of parsed.modules){
+      if (mod.shape !== 'files') continue;
+      for (const rec of (parsed.records[mod.id] || [])){
+        if (!rec.attachment || !rec.attachment.data) continue;
+        const blob = base64ToBlob(rec.attachment.data, rec.attachment.mimeType);
+        const newKey = uid('file');
+        try { await idbPutBlob(newKey, blob, rec.attachment.name, rec.attachment.mimeType); }
+        catch(e){ console.warn('Could not restore attachment for', rec.id, e); }
+        rec.attachment = { idbKey: newKey, name: rec.attachment.name, mimeType: rec.attachment.mimeType, size: rec.attachment.size };
+      }
+    }
     state.modules = parsed.modules;
     state.records = parsed.records;
     saveState();
@@ -1722,6 +1937,9 @@ const SYNC_REFUSE_MESSAGES = {
   'checklist|docx':     'Not offered — a checklist\'s done/not-done state doesn\'t have a good home in a document; that\'s the whole point of a checklist.',
   'checklist|calendar': 'Not offered — a checklist has no date/time to schedule.',
   'event|docx':         'Not offered — scheduled things belong on a calendar, not in a document.',
+  'files|sheets':       'Not offered — files/photos stay on this device, not Drive; there\'s no file data here to put in a spreadsheet.',
+  'files|docx':         'Not offered — files/photos stay on this device, not Drive.',
+  'files|calendar':     'Not offered — files/photos have no date/time to schedule.',
 };
 
 function openSyncModal(mod){
