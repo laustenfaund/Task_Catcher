@@ -11,7 +11,7 @@ See [`DESIGN.md`](DESIGN.md) for the full reasoning behind every decision
 below, including why this is its own app rather than a Project Manager
 feature.
 
-## Status: working prototype (Phases 1–4 of 5)
+## Status: all 5 build phases complete
 
 ## What's built
 
@@ -60,9 +60,16 @@ feature.
   automatically (Daily/Weekly, checked when you open the app — there's no
   such thing as a true background schedule for a closed browser tab) or
   stay Manual.
+- **File / photo modules** — a fifth module shape: one uploaded file or
+  photo per record, e.g. a scanned insurance card. Stored on this device
+  in IndexedDB (not Drive), travels with Backup. Unrelated to Quick
+  Capture's photo input — that one discards the photo and keeps only the
+  AI-cleaned text; this keeps the actual file, on purpose, no AI involved.
+- **Manual** — 📖 Manual (sidebar) opens a full walkthrough of every
+  feature, same pattern as U/I's and Archive Mole's manuals, styled to
+  match Task Catcher's own colors.
 
-**Not yet built:** Drive file/photo-reference modules — the last open piece
-of Phase 5.
+Phase 5 is complete.
 
 ## Storage & privacy model
 
