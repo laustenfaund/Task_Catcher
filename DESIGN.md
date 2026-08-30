@@ -278,6 +278,46 @@ rather than as a generic proof of the module system:
   from Personal Notes and from Unanswered Questions because it resolves
   when the appointment happens, not when someone answers it.
 
+## Backup & transfer
+
+A deliberate departure from PM and Archive Mole, both of which accept "no
+export/backup, `localStorage` is the only copy" as a known risk rather than
+solving it. Task Catcher's single-person, cross-device use (one person's
+own laptop and phone, no account, no server) makes that risk worth actually
+addressing rather than inheriting by default.
+
+**What a website can't do:** prevent a deliberate browser "clear site
+data." That's a browser security boundary, not a limitation of this app —
+no web app can architect around it. So the goal isn't preventing loss,
+it's making loss trivially recoverable, and making the same data reach a
+second device without a server.
+
+**Export / Import, not sync.** Export produces one portable JSON file —
+every module and every record, deliberately excluding the entire
+`settings` object (API keys and the export-schedule choice itself stay
+device-specific, never travel in a file that might get emailed or dropped
+in a shared folder). Import reads one back in, replacing everything
+currently in the app — a full restore, not a merge, avoiding the
+conflict-resolution problem PM's one-way-sync design already decided
+wasn't worth taking on. Import is always a manual, explicit action (pick a
+file, confirm what it will replace) — never automatic, so this doesn't
+become the automatic-read-back problem in a new shape.
+
+**"Scheduled" export means checked-on-open, not backgrounded.** There is no
+way for a closed, server-less page to wake itself on a clock — particularly
+on iOS, which doesn't support the APIs that would even attempt it. Setting
+Export to Daily or Weekly doesn't start a background timer; it means the
+app compares now against the last export time once, at startup, and if
+overdue, exports quietly right then with a toast, not a prompt. Practically
+equivalent for someone who opens the app regularly (which this app is
+built for), honestly different from true scheduling, and described that way
+rather than implied otherwise.
+
+**`navigator.storage.persist()`** is requested at startup as a real,
+free mitigation for *automatic* eviction under disk pressure — a different
+and much narrower problem than a deliberate clear, not a substitute for
+the export/import path above.
+
 ## Known risks (accepted, not hidden)
 
 - **A blank Library the first time someone opens it is still a cliff**,

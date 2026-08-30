@@ -48,10 +48,18 @@ feature.
   type change that would lose or corrupt data asks for confirmation or is
   refused outright with an error naming which records are the problem —
   never silently applied partway.
-- **Connections** — one place (gear icon, sidebar) to store your Anthropic
-  key and Google Client ID / API key. Stored only in this browser; the
-  Google sign-in itself doesn't persist across a reload, same as Project
-  Manager.
+- **Settings** — one place (gear icon, sidebar) for your Anthropic key,
+  Google Client ID / API key, and backup/transfer. Stored only in this
+  browser; the Google sign-in itself doesn't persist across a reload, same
+  as Project Manager.
+- **Backup & transfer** — Export writes one portable file with every module
+  and record (never your keys); Import reads one back in, replacing what's
+  currently here, after confirming what it'll replace. That's how this
+  moves between your phone and laptop with no account and no server — move
+  the file yourself, however you'd move any file. Export can run
+  automatically (Daily/Weekly, checked when you open the app — there's no
+  such thing as a true background schedule for a closed browser tab) or
+  stay Manual.
 
 **Not yet built:** Drive file/photo-reference modules — the last open piece
 of Phase 5.
