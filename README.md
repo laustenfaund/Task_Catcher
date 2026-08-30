@@ -11,48 +11,59 @@ See [`DESIGN.md`](DESIGN.md) for the full reasoning behind every decision
 below, including why this is its own app rather than a Project Manager
 feature.
 
-## Status: early prototype (Phase 1 of 5)
+## Status: working prototype (Phases 1–4 of 5)
 
-This is the module engine and local record-keeping only — the part of the
-design with no existing code to reuse from the rest of the family. **Not
-yet built:** cross-module links & backlinks, sync (Sheets/Docx/Drive/
-Calendar), and AI photo capture. See "Build phases" below.
-
-## What's in this prototype
+## What's built
 
 - **Modules** — pick a pre-made template from the **Library** (a few generic
   starters, plus a first Medical pack: Doctors, Appointments, Referrals,
-  Medications, Notes to Bring) or build a custom one from scratch. Name it
-  yourself; it joins the sidebar.
+  Medications, Notes to Bring), describe what you need and let **AI propose
+  one** (fields, and links to what you already have — reviewed and editable
+  before anything is created), or build one yourself field by field
+  ("Advanced," tucked below the AI option). Name it yourself; it joins the
+  sidebar.
 - **Records** — add, edit, delete records in any module, rendered
   appropriately for that module's shape (table, checklist, notes, or dated
   event). Every record gets a built-in Notes field automatically.
+- **Cross-module links** — a field can link to one or many records in
+  another module, always chosen manually. Any record's page shows what it
+  links to *and* what links back to it (backlinks), each clickable. Deleting
+  something with live backlinks warns first, naming the count; a link that
+  goes stale another way shows as "no longer exists" rather than vanishing
+  silently.
+- **Sync** — per module, a shape-aware choice of Google Sheets / Docs /
+  Calendar, reusing Project Manager's existing OAuth pattern (bring your own
+  Google Cloud project). A combination that would silently lose meaning is
+  refused outright with a reason; one that's just a lossy fit is offered
+  with a disclosed warning first. One-way push only, same as the rest of
+  the family — nothing is ever read back from Google.
+- **AI capture** — Quick Capture on the home page takes typed text and/or a
+  photo, and an "AI clean up" pass turns it into one organized note for you
+  to review before saving. Uses your own Anthropic key (Connections), same
+  BYOK pattern as U/I and Archive Mole.
 - **Home page** — four collapsed cards (Quick capture, Coming up, Next
   steps, Unanswered questions), each expanding to a full list on click.
 - **Schema editing** — editing a module's fields after records already
-  exist in it follows a confirm-then-refuse pattern: a field deletion that
-  would lose data asks for confirmation first; a field-type change that
-  existing values genuinely don't fit is refused outright, with an error
-  naming which records are the problem — never silently applied partway.
+  exist in it follows a confirm-then-refuse pattern: a field deletion or
+  type change that would lose or corrupt data asks for confirmation or is
+  refused outright with an error naming which records are the problem —
+  never silently applied partway.
+- **Connections** — one place (gear icon, sidebar) to store your Anthropic
+  key and Google Client ID / API key. Stored only in this browser; the
+  Google sign-in itself doesn't persist across a reload, same as Project
+  Manager.
 
-## Build phases
-
-1. **Module engine + Library + local record CRUD** — this prototype.
-2. Cross-module links and the backlink index (the one piece of
-   infrastructure with no precedent elsewhere in the family).
-3. Sync — porting Project Manager's existing Google OAuth / Sheets / Docx /
-   Drive pattern, plus Calendar as a new push target.
-4. AI capture — porting the BYOK Claude pattern from U/I and Archive Mole,
-   scoped narrowly to "messy photo/text → one clean organized note."
-5. The Medical pack's content, home-page polish, PWA installability
-   (manifest/service worker/icons, following the same pattern as the other
-   three apps).
+**Not yet built:** Phase 5 — Drive file/photo-reference modules, and PWA
+install files (manifest/service worker/icons) so the app installs like a
+real app on a phone.
 
 ## Storage & privacy model
 
 Same pattern as the rest of the family: everything lives in this browser's
-`localStorage` on this device. No account, no server, nothing sent
-anywhere — this prototype phase doesn't call any external service at all.
+`localStorage` on this device. No account, no server. The only network
+calls are the direct ones you trigger yourself — an Anthropic API call for
+AI capture/module setup, or a Google API call when you click Sync — using
+keys you supply under Connections. Nothing routes through a server of ours.
 
 ## Usage
 

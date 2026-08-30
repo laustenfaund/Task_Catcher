@@ -6,6 +6,8 @@
 <title>Task Catcher</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js"></script>
 <style>
 :root{
   /* Interface panels — solid, calm, easy to read. The stripes live in the
@@ -303,6 +305,7 @@ table.record-table td.actions{white-space:nowrap;width:1%;}
     <nav class="module-list" id="moduleList"></nav>
     <div class="sidebar-footer">
       <button class="btn-library" id="openLibraryBtn">+ Library</button>
+      <button class="btn-library" id="openConnectionsBtn" style="margin-top:6px;">⚙ Connections</button>
     </div>
   </aside>
 
@@ -320,12 +323,14 @@ table.record-table td.actions{white-space:nowrap;width:1%;}
 const STORE_KEY = 'tc_state_v1';
 
 const FIELD_TYPES = {
-  text:    { label: 'Short text' },
-  longtext:{ label: 'Long text' },
-  date:    { label: 'Date' },
-  number:  { label: 'Number' },
-  select:  { label: 'Choice list' },
-  checkbox:{ label: 'Checkbox' },
+  text:      { label: 'Short text' },
+  longtext:  { label: 'Long text' },
+  date:      { label: 'Date' },
+  number:    { label: 'Number' },
+  select:    { label: 'Choice list' },
+  checkbox:  { label: 'Checkbox' },
+  'link-one':  { label: 'Link — one record', isLink: true, multi: false },
+  'link-many': { label: 'Link — many records', isLink: true, multi: true },
 };
 
 const SHAPES = {
@@ -334,6 +339,24 @@ const SHAPES = {
   checklist: { label: 'Checklist', hint: 'Simple done / not-done items.' },
   event:     { label: 'Dated / scheduled', hint: 'Things with a date — e.g. Appointments. Include one Date field.' },
 };
+
+/* Per-shape sync-target compatibility. 'ok' offers the target with no
+   warning; 'warn' offers it but discloses the degradation before syncing;
+   'refuse' doesn't offer it at all — a combination that would silently
+   lose or corrupt the data's meaning. */
+const SYNC_RULES = {
+  table:     { sheets:'ok',    docx:'warn',   calendar:'refuse' },
+  notes:     { sheets:'warn',  docx:'ok',     calendar:'refuse' },
+  checklist: { sheets:'warn',  docx:'refuse', calendar:'refuse' },
+  event:     { sheets:'warn',  docx:'refuse', calendar:'ok' },
+};
+const SYNC_WARN_MESSAGES = {
+  'table|docx':     'This will flatten each record into a plain paragraph in the document — table structure won’t carry over. Sync anyway?',
+  'notes|sheets':    'This will put one note per row in a single cell — you’ll lose the longer, readable layout. Sync anyway?',
+  'checklist|sheets':'This will flatten checked/unchecked state into plain text columns. Sync anyway?',
+  'event|sheets':    'This will sync as a flat log of appointments, not a live calendar. Sync anyway?',
+};
+const SYNC_TARGET_LABELS = { sheets:'Google Sheets', docx:'Google Docs', calendar:'Google Calendar' };
 
 function uid(prefix){ return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
@@ -369,7 +392,8 @@ const MEDICAL_TEMPLATES = [
 const ALL_TEMPLATES = STARTER_TEMPLATES.concat(MEDICAL_TEMPLATES);
 
 function seedState(){
-  const s = { modules: [], records: {}, view: {type:'home'} };
+  const s = { modules: [], records: {}, view: {type:'home'},
+    settings: { anthropicKey:'', googleClientId:'', googleApiKey:'', spreadsheetId:'' } };
   const seedFrom = (name, tplName) => {
     const tpl = STARTER_TEMPLATES.find(t => t.name === tplName);
     const mod = instantiateModule(s, tpl, name);
@@ -399,7 +423,11 @@ let state = loadState();
 function loadState(){
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (!s.settings) s.settings = { anthropicKey:'', googleClientId:'', googleApiKey:'', spreadsheetId:'' };
+      return s;
+    }
   } catch(e){ console.warn('Could not read saved data', e); }
   return seedState();
 }
@@ -422,6 +450,52 @@ function recordTitle(mod, rec){
   return '(untitled)';
 }
 function dateField(mod){ return mod.fields.find(f => f.type === 'date') || null; }
+
+/* ---------- Links & backlinks ----------
+   A link field's value is a record id (link-one) or array of record ids
+   (link-many), always chosen manually by the person — never inferred.
+   Backlinks are computed on demand by scanning every module's records for
+   a link field pointing at the record in question, rather than kept as a
+   separately-maintained reverse index — same end result (a record can show
+   what points at it), simpler to keep correct at this scale. */
+function findRecordById(moduleId, recId){
+  return moduleRecords(moduleId).find(r => r.id === recId) || null;
+}
+function linkFieldValueIds(f, rec){
+  const v = rec.fields[f.id];
+  if (f.type === 'link-many') return Array.isArray(v) ? v : [];
+  return v ? [v] : [];
+}
+function getBacklinks(targetMod, targetRec){
+  const out = [];
+  state.modules.forEach(mod => {
+    mod.fields.filter(f => f.type === 'link-one' || f.type === 'link-many').forEach(f => {
+      if (f.targetModuleId !== targetMod.id) return;
+      moduleRecords(mod.id).forEach(rec => {
+        if (linkFieldValueIds(f, rec).includes(targetRec.id)) out.push({ mod, rec, field: f });
+      });
+    });
+  });
+  return out;
+}
+function backlinksForModule(mod){
+  // Every backlink pointing at any record currently in this module — used
+  // for the module-delete warning.
+  let count = 0;
+  moduleRecords(mod.id).forEach(rec => { count += getBacklinks(mod, rec).length; });
+  return count;
+}
+function linkFieldDisplay(f, rec){
+  const targetMod = getModule(f.targetModuleId);
+  if (!targetMod) return '—';
+  const ids = linkFieldValueIds(f, rec);
+  if (!ids.length) return '—';
+  const titles = ids.map(id => {
+    const r = findRecordById(targetMod.id, id);
+    return r ? recordTitle(targetMod, r) : '(linked record no longer exists)';
+  });
+  return titles.join(', ');
+}
 
 /* =========================================================
    Rendering
@@ -461,6 +535,7 @@ homeNavBtnListener();
 function homeNavBtnListener(){
   document.getElementById('homeNavBtn').onclick = () => { state.view = {type:'home'}; render(); };
   document.getElementById('openLibraryBtn').onclick = () => openLibraryModal();
+  document.getElementById('openConnectionsBtn').onclick = () => openConnectionsModal();
 }
 
 /* ---------- Home ---------- */
@@ -480,7 +555,7 @@ function renderHome(){
   mainArea.appendChild(cards);
 
   const roadmap = el('div', 'roadmap-note',
-    'Cross-module links, sync (Sheets / Docx / Drive / Calendar), and AI photo capture arrive in later build phases — this is the module engine and local record-keeping on their own.');
+    'Add your Anthropic and Google keys under Connections to light up AI capture, AI-assisted module setup, and Sheets/Docs/Calendar sync. Still not built: phone install (PWA) files, and Drive file/photo links.');
   mainArea.appendChild(roadmap);
 }
 
@@ -496,10 +571,53 @@ function renderQuickCaptureCard(){
   const card = el('div', 'card open');
   const body = el('div', 'quick-capture');
   const label = el('div', 'card-title', 'Quick capture');
-  const hint = el('div', 'quick-capture-hint', 'Jot something down now, organize it later. (Photo capture with AI cleanup arrives in a later phase — for now, type or paste.)');
+  const hint = el('div', 'quick-capture-hint', 'Jot something down, or attach a photo of messy notes and let AI turn it into one clean, organized note — review it before it saves.');
   const ta = document.createElement('textarea');
   ta.placeholder = 'Type or paste a quick note…';
+  body.appendChild(label); body.appendChild(hint); body.appendChild(ta);
+
+  const photoRow = el('div', ''); photoRow.style.marginTop = '8px'; photoRow.style.display = 'flex'; photoRow.style.alignItems = 'center'; photoRow.style.gap = '10px';
+  const fileInput = document.createElement('input'); fileInput.type = 'file'; fileInput.accept = 'image/*'; fileInput.style.display = 'none';
+  const attachBtn = buttonEl('📷 Attach photo', 'btn-secondary', () => fileInput.click());
+  const thumb = document.createElement('img'); thumb.style.height = '32px'; thumb.style.borderRadius = '6px'; thumb.style.display = 'none';
+  let photoData = null; // {base64, mediaType}
+  fileInput.onchange = async () => {
+    const file = fileInput.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      photoData = { base64: dataUrl.split(',')[1], mediaType: file.type };
+      thumb.src = dataUrl; thumb.style.display = 'inline-block';
+    };
+    reader.readAsDataURL(file);
+  };
+  photoRow.appendChild(fileInput); photoRow.appendChild(attachBtn); photoRow.appendChild(thumb);
+  body.appendChild(photoRow);
+
+  const errBox = el('div', ''); body.appendChild(errBox);
+
   const row = el('div', 'quick-capture-row');
+  const aiBtn = buttonEl('✨ Clean up with AI', 'btn-secondary', async () => {
+    if (!state.settings.anthropicKey){
+      errBox.innerHTML = ''; errBox.appendChild(el('div', 'error-box', 'No Anthropic API key set yet — add one under Connections first.'));
+      return;
+    }
+    if (!ta.value.trim() && !photoData){
+      alert('Type something or attach a photo first.');
+      return;
+    }
+    const origText = aiBtn.textContent; aiBtn.disabled = true; aiBtn.textContent = 'Reading…'; errBox.innerHTML = '';
+    try {
+      const cleaned = await cleanUpCapture(ta.value.trim(), photoData);
+      ta.value = cleaned; // shown for review — not saved yet
+    } catch(err){
+      const msg = err.message === 'NO_KEY' ? 'No Anthropic API key set yet — add one under Connections first.'
+        : 'Couldn\'t clean this up (' + err.message + '). Your original text is untouched — you can still save it as-is.';
+      errBox.appendChild(el('div', 'error-box', msg));
+    } finally {
+      aiBtn.disabled = false; aiBtn.textContent = origText;
+    }
+  });
   const saveBtn = document.createElement('button');
   saveBtn.className = 'btn btn-primary'; saveBtn.textContent = 'Save note';
   saveBtn.onclick = () => {
@@ -508,14 +626,27 @@ function renderQuickCaptureCard(){
     const mod = findFirstNotesModule();
     if (!mod){ alert('Add a Notes module from the Library first.'); return; }
     state.records[mod.id].push({ id: uid('r'), fields:{}, notes: val, createdAt: Date.now(), updatedAt: Date.now() });
-    ta.value = '';
+    ta.value = ''; photoData = null; thumb.style.display = 'none'; fileInput.value = '';
     render();
   };
-  row.appendChild(el('div','quick-capture-hint',''));
+  row.appendChild(aiBtn);
   row.appendChild(saveBtn);
-  body.appendChild(label); body.appendChild(hint); body.appendChild(ta); body.appendChild(row);
+  body.appendChild(row);
   card.appendChild(body);
   return card;
+}
+
+async function cleanUpCapture(text, photoData){
+  const system = [
+    'You clean up someone\'s messy captured notes (typed shorthand, or notes photographed off paper) into one clean, organized, legible note.',
+    'Reorganize and clarify — fix obvious structure, group related points, spell out clear abbreviations — but do not invent facts, dates, names, or details that aren\'t actually there or clearly implied.',
+    'If part of the photo or text is genuinely illegible or unclear, say so briefly in the note rather than guessing or silently leaving it out.',
+    'Respond with only the cleaned-up note itself — no preamble, no "Here is your cleaned up note:", nothing else.',
+  ].join('\n');
+  const content = [];
+  content.push({ type: 'text', text: text ? ('Raw notes:\n' + text) : 'Read the attached photo of handwritten/typed notes and clean them up.' });
+  if (photoData) content.push({ type: 'image', source: { type: 'base64', media_type: photoData.mediaType, data: photoData.base64 } });
+  return (await callClaude({ system, userContent: content, maxTokens: 800 })).trim();
 }
 
 function collapsibleCard(key, title, countText, previewText, bodyRenderer){
@@ -628,7 +759,10 @@ function renderModule(moduleId){
   const editBtn = document.createElement('button');
   editBtn.className = 'btn btn-secondary'; editBtn.textContent = 'Edit module';
   editBtn.onclick = () => openSchemaModal(mod);
-  actions.appendChild(addBtn); actions.appendChild(editBtn);
+  const syncBtn = document.createElement('button');
+  syncBtn.className = 'btn btn-secondary'; syncBtn.textContent = 'Sync';
+  syncBtn.onclick = () => openSyncModal(mod);
+  actions.appendChild(addBtn); actions.appendChild(editBtn); actions.appendChild(syncBtn);
   toolbar.appendChild(el('div','',''));
   toolbar.appendChild(actions);
   mainArea.appendChild(toolbar);
@@ -669,8 +803,12 @@ function renderChecklistView(mod, records){
     const t = el('span', 'cl-title', recordTitle(mod, rec)); t.style.cursor='pointer';
     t.onclick = () => openRecordModal(mod, rec);
     row.appendChild(t);
-    mod.fields.filter(f => f.id !== primaryField(mod)?.id && f.type !== 'checkbox' && rec.fields[f.id]).forEach(f => {
-      row.appendChild(el('span', 'tag-chip', rec.fields[f.id]));
+    mod.fields.filter(f => f.id !== primaryField(mod)?.id && f.type !== 'checkbox').forEach(f => {
+      if (f.type === 'link-one' || f.type === 'link-many'){
+        if (linkFieldValueIds(f, rec).length) row.appendChild(el('span', 'tag-chip', linkFieldDisplay(f, rec)));
+      } else if (rec.fields[f.id]){
+        row.appendChild(el('span', 'tag-chip', rec.fields[f.id]));
+      }
     });
     list.appendChild(row);
   });
@@ -713,9 +851,13 @@ function renderTableView(mod, records, isEvent){
     const tr = document.createElement('tr');
     mod.fields.forEach(f => {
       const td = document.createElement('td');
-      let v = rec.fields[f.id];
-      if (f.type === 'date' && v) v = formatDate(v);
-      td.textContent = v || '—';
+      if (f.type === 'link-one' || f.type === 'link-many'){
+        td.textContent = linkFieldDisplay(f, rec);
+      } else {
+        let v = rec.fields[f.id];
+        if (f.type === 'date' && v) v = formatDate(v);
+        td.textContent = v || '—';
+      }
       tr.appendChild(td);
     });
     const noteTd = document.createElement('td');
@@ -817,11 +959,17 @@ function openLibraryModal(){
       body.appendChild(grid);
     });
     body.appendChild(el('div', 'tpl-group-label', 'Custom'));
-    const customBtn = document.createElement('button');
-    customBtn.className = 'tpl-custom-btn';
-    customBtn.textContent = '+ Build your own module';
-    customBtn.onclick = () => { closeModal(); openSchemaModal(null); };
-    body.appendChild(customBtn);
+    const aiBtn = document.createElement('button');
+    aiBtn.className = 'tpl-custom-btn';
+    aiBtn.innerHTML = '✨ Describe what you need <span class="field-hint" style="display:block;font-weight:400;margin-top:2px;">AI proposes a module — fields, and links to what you already have — for you to review.</span>';
+    aiBtn.onclick = () => { closeModal(); openAIModuleDialog(); };
+    body.appendChild(aiBtn);
+    const advancedBtn = document.createElement('button');
+    advancedBtn.className = 'btn-text';
+    advancedBtn.style.marginTop = '8px';
+    advancedBtn.textContent = 'Advanced: build it yourself, field by field →';
+    advancedBtn.onclick = () => { closeModal(); openSchemaModal(null); };
+    body.appendChild(advancedBtn);
   }, []);
 }
 
@@ -850,17 +998,129 @@ function promptModuleName(tpl){
   ]);
 }
 
-/* ---------- Schema (create / edit module) modal ---------- */
-function openSchemaModal(mod){
+/* ---------- AI-assisted module creation ----------
+   The AI's job here is the same as everywhere else in this app: propose,
+   never silently apply. It drafts a name/shape/fields/links from a
+   description, and hands off to the ordinary schema editor for review —
+   nothing is created until the person clicks Create there. */
+function openAIModuleDialog(){
+  openModal('Describe what you need', (body) => {
+    body.appendChild(el('div', 'field-hint',
+      'Tell the AI what you want to track — it\'ll propose a name, the right kind of fields, and links to your existing modules where that makes sense. You review and adjust everything before it\'s created.'));
+    const grp = el('div', 'field-group'); grp.style.marginTop = '12px';
+    grp.appendChild(el('label', 'field-label', 'What do you need?'));
+    const ta = document.createElement('textarea');
+    ta.placeholder = 'e.g. "Track my car\'s maintenance — oil changes, tire rotations, which shop did the work, and when the next one is due."';
+    ta.style.minHeight = '90px';
+    grp.appendChild(ta);
+    body.appendChild(grp);
+    const errBox = el('div', ''); errBox.id = 'aiDialogError';
+    body.appendChild(errBox);
+    body._getText = () => ta.value.trim();
+    body._errBox = errBox;
+  }, [
+    buttonEl('Cancel', 'btn-secondary', closeModal),
+    buttonEl('Ask AI', 'btn-primary', async (e) => {
+      const body = document.querySelector('.modal-body');
+      const desc = body._getText();
+      if (!desc){ alert('Describe what you need first.'); return; }
+      if (!state.settings.anthropicKey){
+        body._errBox.innerHTML = '';
+        body._errBox.appendChild(el('div', 'error-box', 'No Anthropic API key set yet — add one under Connections first.'));
+        return;
+      }
+      const btn = e.target; const origText = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Thinking…';
+      body._errBox.innerHTML = '';
+      try {
+        const draft = await proposeModuleFromAI(desc);
+        closeModal();
+        openSchemaModal(null, draft);
+      } catch(err){
+        btn.disabled = false; btn.textContent = origText;
+        const msg = err.message === 'NO_KEY' ? 'No Anthropic API key set yet — add one under Connections first.'
+          : 'Couldn\'t get a proposal (' + err.message + '). You can try again, or build the module manually instead.';
+        body._errBox.innerHTML = '';
+        body._errBox.appendChild(el('div', 'error-box', msg));
+      }
+    }),
+  ]);
+}
+
+const AI_FIELD_TYPE_NAMES = 'text (short text), longtext (long text), date, number, select (choice list), checkbox, link-one (links to one record in another module), link-many (links to several records in another module)';
+
+async function proposeModuleFromAI(description){
+  const moduleNames = state.modules.map(m => m.name);
+  const system = [
+    'You are helping someone design a new module (a record type) for Task Catcher, a personal organizer app.',
+    'A module has a name, a "shape" (table = repeating rows of similar records; notes = freeform long-form entries with no custom fields; checklist = simple done/not-done items; event = things with a date), and a list of fields.',
+    'Available field types: ' + AI_FIELD_TYPE_NAMES + '.',
+    'Existing modules the person already has, that new fields can link to if it genuinely makes sense: ' + (moduleNames.length ? moduleNames.join(', ') : '(none yet)') + '.',
+    'Only propose a link-one/link-many field when it clearly matches one of those existing module names — otherwise just use a plain text field instead.',
+    'Keep the field list focused — only what the description actually asks for, not everything imaginable.',
+    '',
+    'Respond in exactly this format and nothing else:',
+    'NAME: <a short module name>',
+    'SHAPE: <table|notes|checklist|event>',
+    'FIELDS:',
+    '- <field label> | <type> | <for select: comma-separated options — for link-one/link-many: the exact existing module name it links to — otherwise blank>',
+    '(one line per field; if shape is notes, this section can be empty)',
+    'RATIONALE: <one sentence explaining the shape and field choices, written to the person, e.g. "A table works well since you\'ll have one row per..."> ',
+  ].join('\n');
+  const text = await callClaude({ system, userContent: description, maxTokens: 700 });
+  return parseAIModuleProposal(text);
+}
+
+function parseAIModuleProposal(text){
+  const lines = text.split('\n');
+  let name = '', shape = 'table', rationale = '';
+  const fields = [];
+  let inFields = false;
+  lines.forEach(line => {
+    const l = line.trim();
+    if (/^NAME:/i.test(l)) { name = l.replace(/^NAME:/i, '').trim(); inFields = false; }
+    else if (/^SHAPE:/i.test(l)) { const s = l.replace(/^SHAPE:/i, '').trim().toLowerCase(); if (SHAPES[s]) shape = s; inFields = false; }
+    else if (/^FIELDS:/i.test(l)) { inFields = true; }
+    else if (/^RATIONALE:/i.test(l)) { rationale = l.replace(/^RATIONALE:/i, '').trim(); inFields = false; }
+    else if (inFields && l.startsWith('-')) {
+      const parts = l.slice(1).split('|').map(p => p.trim());
+      const label = parts[0] || 'Field';
+      let type = (parts[1] || 'text').toLowerCase();
+      if (!FIELD_TYPES[type]) type = 'text';
+      const field = { id: uid('f'), label, type };
+      const extra = parts[2] || '';
+      if (type === 'select' && extra) field.options = extra.split(',').map(s => s.trim()).filter(Boolean);
+      if ((type === 'link-one' || type === 'link-many') && extra){
+        const targetMod = state.modules.find(m => m.name.toLowerCase() === extra.toLowerCase());
+        if (targetMod) field.targetModuleId = targetMod.id;
+        else field.type = 'text'; // named a module we don't actually have — degrade rather than create a dangling link
+      }
+      fields.push(field);
+    }
+  });
+  if (!name) throw new Error('couldn\'t make sense of the response');
+  return { name, shape, fields, rationale: rationale || 'Here\'s a proposed module based on what you described.' };
+}
+
+/* ---------- Schema (create / edit module) modal ----------
+   `prefill` (create mode only) seeds the form from an AI-proposed draft
+   {name, shape, fields, rationale} — still fully editable, nothing is
+   created until the person reviews it and clicks Create, same as picking
+   a Library template. */
+function openSchemaModal(mod, prefill){
   const isEdit = !!mod;
-  let draftFields = isEdit ? JSON.parse(JSON.stringify(mod.fields)) : [];
-  let draftShape = isEdit ? mod.shape : 'table';
+  let draftFields = isEdit ? JSON.parse(JSON.stringify(mod.fields)) : (prefill ? prefill.fields : []);
+  let draftShape = isEdit ? mod.shape : (prefill ? prefill.shape : 'table');
 
   openModal(isEdit ? 'Edit module' : 'Build a module', (body) => {
+    if (prefill && prefill.rationale){
+      body.appendChild(el('div', 'shape-note', '✨ ' + prefill.rationale + ' Review and adjust anything below before creating it.'));
+    }
     const nameGrp = el('div', 'field-group');
     nameGrp.appendChild(el('label', 'field-label', 'Module name'));
     const nameInput = document.createElement('input');
-    nameInput.type = 'text'; nameInput.className = 'field-input'; nameInput.value = isEdit ? mod.name : '';
+    nameInput.type = 'text'; nameInput.className = 'field-input';
+    nameInput.value = isEdit ? mod.name : (prefill ? prefill.name : '');
     nameGrp.appendChild(nameInput);
     body.appendChild(nameGrp);
 
@@ -887,6 +1147,7 @@ function openSchemaModal(mod){
     function renderFieldsList(){
       fieldsList.innerHTML = '';
       draftFields.forEach((f, idx) => {
+        const wrapper = el('div', '');
         const row = el('div', 'schema-field-row');
         const labelInput = document.createElement('input');
         labelInput.type = 'text'; labelInput.value = f.label; labelInput.placeholder = 'Field label';
@@ -898,13 +1159,34 @@ function openSchemaModal(mod){
           if (tk === f.type) opt.selected = true;
           typeSelect.appendChild(opt);
         });
-        typeSelect.onchange = () => { attemptFieldTypeChange(f, typeSelect.value, typeSelect); };
+        typeSelect.onchange = () => {
+          attemptFieldTypeChange(f, typeSelect.value, typeSelect);
+          renderFieldsList();
+        };
         row.appendChild(typeSelect);
         const rm = document.createElement('button');
         rm.className = 'rm-field'; rm.textContent = '✕'; rm.title = 'Remove field';
         rm.onclick = async () => { await attemptFieldRemoval(f, idx); };
         row.appendChild(rm);
-        fieldsList.appendChild(row);
+        wrapper.appendChild(row);
+
+        if (FIELD_TYPES[f.type] && FIELD_TYPES[f.type].isLink){
+          const linkRow = el('div', 'schema-field-row');
+          linkRow.style.marginTop = '-4px';
+          const targetSelect = document.createElement('select');
+          const noneOpt = document.createElement('option');
+          noneOpt.value = ''; noneOpt.textContent = 'Links to… (choose a module)';
+          targetSelect.appendChild(noneOpt);
+          state.modules.forEach(m => {
+            const opt = document.createElement('option'); opt.value = m.id; opt.textContent = m.name;
+            if (f.targetModuleId === m.id) opt.selected = true;
+            targetSelect.appendChild(opt);
+          });
+          targetSelect.onchange = () => { f.targetModuleId = targetSelect.value || null; };
+          linkRow.appendChild(targetSelect);
+          wrapper.appendChild(linkRow);
+        }
+        fieldsList.appendChild(wrapper);
       });
     }
 
@@ -924,6 +1206,8 @@ function openSchemaModal(mod){
     function attemptFieldTypeChange(f, newType, selectEl){
       const recs = isEdit ? moduleRecords(mod.id) : [];
       const badValues = [];
+      const wasLink = FIELD_TYPES[f.type] && FIELD_TYPES[f.type].isLink;
+      const willBeLink = FIELD_TYPES[newType] && FIELD_TYPES[newType].isLink;
       if (newType === 'number' || newType === 'date'){
         recs.forEach(r => {
           const v = r.fields[f.id];
@@ -932,12 +1216,19 @@ function openSchemaModal(mod){
           if (newType === 'date' && isNaN(Date.parse(v))) badValues.push({r, v});
         });
       }
+      if (willBeLink && !wasLink){
+        recs.forEach(r => { if (r.fields[f.id] !== undefined && r.fields[f.id] !== '') badValues.push({r, v: r.fields[f.id]}); });
+      }
+      if (wasLink && !willBeLink){
+        recs.forEach(r => { if (linkFieldValueIds(f, r).length) badValues.push({r, v: '(a link)'}); });
+      }
       if (badValues.length){
         showFieldTypeError(f, newType, badValues, mod);
         selectEl.value = f.type; // revert visually, edit refused
         return;
       }
       f.type = newType;
+      if (willBeLink && !f.targetModuleId) f.targetModuleId = null;
       if (newType === 'select' && !f.options) f.options = [];
     }
 
@@ -972,9 +1263,17 @@ function buildSchemaFooter(mod, isEdit){
   if (isEdit){
     buttons.push(buttonEl('Delete module', 'btn-danger', async () => {
       const recs = moduleRecords(mod.id);
-      const msg = recs.length
-        ? 'This module has <strong>' + recs.length + '</strong> record' + (recs.length===1?'':'s') + '. Deleting the module deletes all of them permanently. Continue?'
-        : 'Delete this empty module?';
+      const inboundLinks = backlinksForModule(mod);
+      let msg;
+      if (recs.length && inboundLinks){
+        msg = 'This module has <strong>' + recs.length + '</strong> record' + (recs.length===1?'':'s') + ', and <strong>' + inboundLinks +
+          '</strong> record' + (inboundLinks===1?'':'s') + ' elsewhere link' + (inboundLinks===1?'s':'') + ' to something in it. ' +
+          'Deleting the module deletes all of it permanently and leaves those links broken. Continue?';
+      } else if (recs.length){
+        msg = 'This module has <strong>' + recs.length + '</strong> record' + (recs.length===1?'':'s') + '. Deleting the module deletes all of them permanently. Continue?';
+      } else {
+        msg = 'Delete this empty module?';
+      }
       const ok = await confirmModal(msg);
       if (!ok) return;
       state.modules = state.modules.filter(m => m.id !== mod.id);
@@ -1039,6 +1338,44 @@ function openRecordModal(mod, rec){
         input = document.createElement('input'); input.type = 'number';
         input.value = draft.fields[f.id] || '';
         input.oninput = () => draft.fields[f.id] = input.value;
+      } else if (f.type === 'link-one'){
+        const targetMod = getModule(f.targetModuleId);
+        input = document.createElement('select');
+        if (!targetMod){
+          input.disabled = true;
+          input.appendChild(el('option','','(no target module set — edit this field in the schema first)'));
+        } else {
+          input.appendChild(el('option','','— none —'));
+          moduleRecords(targetMod.id).forEach(r => {
+            const o = document.createElement('option'); o.value = r.id; o.textContent = recordTitle(targetMod, r);
+            if (draft.fields[f.id] === r.id) o.selected = true;
+            input.appendChild(o);
+          });
+          input.onchange = () => draft.fields[f.id] = input.value || null;
+        }
+      } else if (f.type === 'link-many'){
+        const targetMod = getModule(f.targetModuleId);
+        input = el('div', '');
+        input.style.border = '1px solid var(--line-strong)'; input.style.borderRadius = '8px';
+        input.style.padding = '8px 10px'; input.style.maxHeight = '140px'; input.style.overflowY = 'auto';
+        if (!targetMod || !moduleRecords(targetMod.id).length){
+          input.appendChild(el('div', 'field-hint', targetMod ? 'No records in "' + escapeHtml(targetMod.name) + '" yet to link to.' : '(no target module set — edit this field in the schema first)'));
+        } else {
+          const current = new Set(Array.isArray(draft.fields[f.id]) ? draft.fields[f.id] : []);
+          moduleRecords(targetMod.id).forEach(r => {
+            const rowLabel = document.createElement('label');
+            rowLabel.style.display = 'flex'; rowLabel.style.alignItems = 'center'; rowLabel.style.gap = '8px';
+            rowLabel.style.padding = '4px 0'; rowLabel.style.fontSize = '13.5px';
+            const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = current.has(r.id);
+            cb.onchange = () => {
+              if (cb.checked) current.add(r.id); else current.delete(r.id);
+              draft.fields[f.id] = Array.from(current);
+            };
+            rowLabel.appendChild(cb);
+            rowLabel.appendChild(document.createTextNode(recordTitle(targetMod, r)));
+            input.appendChild(rowLabel);
+          });
+        }
       } else {
         input = document.createElement('input'); input.type = 'text';
         input.value = draft.fields[f.id] || '';
@@ -1047,6 +1384,30 @@ function openRecordModal(mod, rec){
       grp.appendChild(input);
       body.appendChild(grp);
     });
+
+    if (isEdit){
+      const backlinks = getBacklinks(mod, rec);
+      if (backlinks.length){
+        const blGrp = el('div', 'field-group');
+        blGrp.appendChild(el('label', 'field-label', 'Linked from'));
+        const box = el('div', '');
+        box.style.border = '1px solid var(--line)'; box.style.borderRadius = '8px'; box.style.padding = '4px 10px'; box.style.background = 'var(--surface-sunk)';
+        backlinks.forEach(({mod: bMod, rec: bRec, field: bField}) => {
+          const row = el('div', 'item-row');
+          row.style.borderBottom = '1px solid var(--line)';
+          const mainDiv = el('div', 'item-main');
+          const t = el('div', 'item-title', recordTitle(bMod, bRec));
+          t.onclick = () => { closeModal(); openRecordModal(bMod, bRec); };
+          mainDiv.appendChild(t);
+          mainDiv.appendChild(el('div', 'item-meta', bMod.name + ' · via "' + bField.label + '"'));
+          row.appendChild(mainDiv);
+          box.appendChild(row);
+        });
+        blGrp.appendChild(box);
+        body.appendChild(blGrp);
+      }
+    }
+
     const notesGrp = el('div', 'field-group');
     notesGrp.appendChild(el('label', 'field-label', 'Notes'));
     const notesArea = document.createElement('textarea');
@@ -1062,7 +1423,12 @@ function buildRecordFooter(mod, rec, draft){
   const buttons = [];
   if (rec){
     buttons.push(buttonEl('Delete', 'btn-danger', async () => {
-      const ok = await confirmModal('Delete this record? This can’t be undone.');
+      const backlinks = getBacklinks(mod, rec);
+      const msg = backlinks.length
+        ? '<strong>' + backlinks.length + '</strong> record' + (backlinks.length===1?'':'s') + ' link' + (backlinks.length===1?'s':'') +
+          ' to this one. Deleting it leaves those links pointing at something that no longer exists — they’ll show as broken, not be cleaned up automatically. Delete anyway?'
+        : 'Delete this record? This can’t be undone.';
+      const ok = await confirmModal(msg);
       if (!ok) return;
       state.records[mod.id] = moduleRecords(mod.id).filter(r => r.id !== rec.id);
       closeModal(); render();
@@ -1078,6 +1444,316 @@ function buildRecordFooter(mod, rec, draft){
     closeModal(); render();
   }));
   return buttons;
+}
+
+/* =========================================================
+   Connections — Anthropic (BYOK) + Google (BYO Cloud project)
+   Same pattern as the rest of the family: the person's own keys, stored
+   only in this browser's localStorage, nothing routed through a server of
+   ours. The Google connection itself never persists across a reload —
+   only the Client ID / API key do; signing in is a per-session action.
+   ========================================================= */
+let googleRt = { tokenClient: null, accessToken: null, connected: false, initPending: false };
+
+function openConnectionsModal(){
+  openModal('Connections', (body) => {
+    body.appendChild(el('div', 'field-hint',
+      'Your keys are stored only in this browser, on this device, and used only for the direct calls this app makes to Anthropic\'s and Google\'s own APIs. Nothing routes through a server of ours.'));
+
+    const aGrp = el('div', 'field-group'); aGrp.style.marginTop='14px';
+    aGrp.appendChild(el('label', 'field-label', 'Anthropic API key — powers AI capture and AI-assisted module setup'));
+    const aInput = document.createElement('input'); aInput.type = 'password'; aInput.className = 'field-input';
+    aInput.value = state.settings.anthropicKey || ''; aInput.placeholder = 'sk-ant-…';
+    aInput.oninput = () => { state.settings.anthropicKey = aInput.value.trim(); saveState(); };
+    aGrp.appendChild(aInput);
+    body.appendChild(aGrp);
+
+    body.appendChild(el('div', 'tpl-group-label', 'Google — for Sheets / Docs / Calendar sync'));
+    body.appendChild(el('div', 'field-hint', 'Requires your own free Google Cloud project with the Sheets, Drive, Docs, and Calendar APIs enabled, and an OAuth Client ID + API key from it.'));
+
+    const cGrp = el('div', 'field-group');
+    cGrp.appendChild(el('label', 'field-label', 'OAuth Client ID'));
+    const cInput = document.createElement('input'); cInput.type = 'text'; cInput.className = 'field-input';
+    cInput.value = state.settings.googleClientId || ''; cInput.oninput = () => { state.settings.googleClientId = cInput.value.trim(); saveState(); };
+    cGrp.appendChild(cInput);
+    body.appendChild(cGrp);
+
+    const kGrp = el('div', 'field-group');
+    kGrp.appendChild(el('label', 'field-label', 'API key'));
+    const kInput = document.createElement('input'); kInput.type = 'password'; kInput.className = 'field-input';
+    kInput.value = state.settings.googleApiKey || ''; kInput.oninput = () => { state.settings.googleApiKey = kInput.value.trim(); saveState(); };
+    kGrp.appendChild(kInput);
+    body.appendChild(kGrp);
+
+    const statusRow = el('div', 'field-hint');
+    statusRow.id = 'googleStatusRow';
+    statusRow.textContent = googleRt.connected ? 'Google: connected for this session.' :
+      (state.settings.googleClientId ? 'Google: configured, not signed in yet.' : 'Google: not configured.');
+    body.appendChild(statusRow);
+
+    const connectBtn = buttonEl('Connect / Sign in to Google', 'btn-secondary', () => {
+      if (!state.settings.googleClientId || !state.settings.googleApiKey){ alert('Enter both the Client ID and API key first.'); return; }
+      statusRow.textContent = 'Connecting…';
+      tryInitGoogle(true,
+        () => { statusRow.textContent = 'Google: connected for this session.'; },
+        (msg) => { statusRow.textContent = 'Google: ' + msg; });
+    });
+    connectBtn.style.marginTop = '8px';
+    body.appendChild(connectBtn);
+  }, [ buttonEl('Done', 'btn-primary', closeModal) ]);
+}
+
+function tryInitGoogle(promptSignIn, onConnected, onFailed, _attempt){
+  _attempt = _attempt || 0;
+  if (!state.settings.googleClientId || !state.settings.googleApiKey){
+    if (onFailed) onFailed('Google isn\'t configured — add a Client ID and API key under Connections first.');
+    return;
+  }
+  if (typeof gapi === 'undefined' || typeof google === 'undefined'){
+    // Google's own scripts may still be loading — retry briefly, but give up
+    // and report failure rather than looping forever if they never show up
+    // (offline, blocked, or the scripts genuinely failed to load).
+    if (_attempt >= 10){
+      if (onFailed) onFailed('Couldn\'t reach Google\'s sign-in — check your connection and try again.');
+      return;
+    }
+    setTimeout(() => tryInitGoogle(promptSignIn, onConnected, onFailed, _attempt + 1), 500);
+    return;
+  }
+  if (googleRt.tokenClient){
+    if (promptSignIn) googleRt.tokenClient.requestAccessToken();
+    return;
+  }
+  gapi.load('client', async () => {
+    try {
+      await gapi.client.init({
+        apiKey: state.settings.googleApiKey,
+        discoveryDocs: [
+          'https://sheets.googleapis.com/$discovery/rest?version=v4',
+          'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
+          'https://docs.googleapis.com/$discovery/rest?version=v1',
+          'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest',
+        ],
+      });
+    } catch(e){
+      console.warn('Google client init failed', e);
+      if (onFailed) onFailed('Couldn\'t set up the Google connection (' + (e.message || 'check your API key') + ').');
+      return;
+    }
+    googleRt.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: state.settings.googleClientId,
+      scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/calendar.events',
+      callback: (resp) => {
+        if (resp.access_token){
+          googleRt.accessToken = resp.access_token;
+          googleRt.connected = true;
+          gapi.client.setToken({ access_token: resp.access_token });
+          if (onConnected) onConnected();
+        }
+      },
+      error_callback: (err) => {
+        console.error('Google sign-in error', err);
+        if (onFailed) onFailed('Google sign-in didn\'t complete. If your browser blocked a popup, allow popups for this site and try again.');
+        else alert('Google sign-in didn\'t complete. If your browser blocked a popup, allow popups for this site and try again.');
+      },
+    });
+    if (promptSignIn) googleRt.tokenClient.requestAccessToken();
+  });
+}
+
+/* ---------- Claude API (BYOK) ---------- */
+const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
+async function callClaude({ system, userContent, maxTokens }){
+  if (!state.settings.anthropicKey) throw new Error('NO_KEY');
+  const res = await fetch(CLAUDE_API_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': state.settings.anthropicKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-5',
+      max_tokens: maxTokens || 1024,
+      system: system,
+      messages: [{ role: 'user', content: userContent }],
+    }),
+  });
+  if (!res.ok){
+    let detail = '';
+    try { detail = (await res.json()).error?.message || ''; } catch(e){}
+    throw new Error(detail || ('HTTP ' + res.status));
+  }
+  const json = await res.json();
+  const block = (json.content || []).find(b => b.type === 'text');
+  return block ? block.text : '';
+}
+
+/* =========================================================
+   Sync — one-way push only, per-shape target rules
+   ========================================================= */
+const SYNC_REFUSE_MESSAGES = {
+  'table|calendar':     'Not offered — a table of records has no single date/time to schedule.',
+  'notes|calendar':     'Not offered — freeform notes have no date/time to schedule.',
+  'checklist|docx':     'Not offered — a checklist\'s done/not-done state doesn\'t have a good home in a document; that\'s the whole point of a checklist.',
+  'checklist|calendar': 'Not offered — a checklist has no date/time to schedule.',
+  'event|docx':         'Not offered — scheduled things belong on a calendar, not in a document.',
+};
+
+function openSyncModal(mod){
+  openModal('Sync — ' + mod.name, (body) => {
+    const statusBox = el('div', ''); statusBox.id = 'syncStatusBox';
+    Object.keys(SYNC_TARGET_LABELS).forEach(target => {
+      const rule = SYNC_RULES[mod.shape][target];
+      const row = el('div', 'schema-field-row');
+      row.style.alignItems = 'flex-start';
+      const info = el('div', ''); info.style.flex = '1';
+      info.appendChild(el('div', '', SYNC_TARGET_LABELS[target]));
+      if (rule === 'refuse'){
+        info.appendChild(el('div', 'field-hint', SYNC_REFUSE_MESSAGES[mod.shape + '|' + target]));
+      } else if (rule === 'warn'){
+        info.appendChild(el('div', 'field-hint', SYNC_WARN_MESSAGES[mod.shape + '|' + target]));
+      } else {
+        info.appendChild(el('div', 'field-hint', 'A natural fit for this module\'s shape.'));
+      }
+      row.appendChild(info);
+      const btn = document.createElement('button');
+      btn.className = 'btn ' + (rule === 'refuse' ? 'btn-secondary' : 'btn-primary');
+      btn.textContent = rule === 'refuse' ? 'Not available' : 'Sync now';
+      btn.disabled = (rule === 'refuse');
+      btn.onclick = async () => {
+        if (rule === 'warn'){
+          const ok = await confirmModal(SYNC_WARN_MESSAGES[mod.shape + '|' + target]);
+          if (!ok) return;
+        }
+        runSync(mod, target, statusBox);
+      };
+      row.appendChild(btn);
+      body.appendChild(row);
+    });
+    body.appendChild(statusBox);
+  }, [ buttonEl('Close', 'btn-secondary', closeModal) ]);
+}
+
+function syncStatus(box, text, isError){
+  box.innerHTML = '';
+  box.appendChild(el('div', isError ? 'error-box' : 'shape-note', text));
+}
+
+async function runSync(mod, target, statusBox){
+  if (!state.settings.googleClientId || !state.settings.googleApiKey){
+    syncStatus(statusBox, 'Google isn\'t configured yet — add your Client ID and API key under Connections first.', true);
+    return;
+  }
+  if (!googleRt.connected){
+    syncStatus(statusBox, 'Connecting to Google…', false);
+    tryInitGoogle(true,
+      () => runSync(mod, target, statusBox),
+      (msg) => syncStatus(statusBox, msg, true));
+    return;
+  }
+  syncStatus(statusBox, 'Syncing…', false);
+  try {
+    if (target === 'sheets') await syncModuleToSheets(mod);
+    else if (target === 'docx') await syncModuleToDocx(mod);
+    else if (target === 'calendar') await syncModuleToCalendar(mod);
+    saveState();
+    syncStatus(statusBox, 'Synced just now.', false);
+  } catch(err){
+    console.error('Sync failed', err);
+    syncStatus(statusBox, 'Sync didn\'t go through (' + (err.message || 'unknown error') + '). Nothing was changed here locally.', true);
+  }
+}
+
+function fieldValueForExport(f, rec){
+  if (f.type === 'link-one' || f.type === 'link-many') return linkFieldDisplay(f, rec);
+  if (f.type === 'date') return rec.fields[f.id] ? formatDate(rec.fields[f.id]) : '';
+  if (f.type === 'checkbox') return rec.fields[f.id] ? 'Yes' : 'No';
+  return rec.fields[f.id] || '';
+}
+
+async function findOrCreateFolder(name, parentId){
+  const safeName = name.replace(/'/g, "\\'");
+  const parentClause = parentId ? (" and '" + parentId + "' in parents") : " and 'root' in parents";
+  const q = "mimeType='application/vnd.google-apps.folder' and name='" + safeName + "' and trashed=false" + parentClause;
+  const listRes = await gapi.client.drive.files.list({ q, fields: 'files(id,name)' });
+  if (listRes.result.files && listRes.result.files.length) return listRes.result.files[0].id;
+  const createRes = await gapi.client.drive.files.create({
+    resource: { name, mimeType: 'application/vnd.google-apps.folder', parents: parentId ? [parentId] : [] },
+    fields: 'id',
+  });
+  return createRes.result.id;
+}
+
+async function syncModuleToSheets(mod){
+  if (!state.settings.spreadsheetId){
+    const folderId = await findOrCreateFolder('Task Catcher', null);
+    const res = await gapi.client.sheets.spreadsheets.create({ properties: { title: 'Task Catcher Sync' } });
+    state.settings.spreadsheetId = res.result.spreadsheetId;
+    await gapi.client.drive.files.update({ fileId: state.settings.spreadsheetId, addParents: folderId, removeParents: 'root', fields: 'id,parents' });
+  }
+  const ssId = state.settings.spreadsheetId;
+  const meta = await gapi.client.sheets.spreadsheets.get({ spreadsheetId: ssId });
+  const existingTitles = (meta.result.sheets || []).map(s => s.properties.title);
+  const tabName = mod.name.slice(0, 95); // Sheets tab title limit
+  if (!existingTitles.includes(tabName)){
+    await gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: ssId,
+      resource: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+    });
+  }
+  const headers = mod.fields.map(f => f.label).concat('Notes');
+  const rows = moduleRecords(mod.id).map(rec => mod.fields.map(f => fieldValueForExport(f, rec)).concat(rec.notes || ''));
+  await gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId: ssId,
+    range: "'" + tabName + "'!A1",
+    valueInputOption: 'RAW',
+    resource: { values: [headers, ...rows] },
+  });
+}
+
+async function syncModuleToDocx(mod){
+  if (!mod.docId){
+    const folderId = await findOrCreateFolder('Task Catcher', null);
+    const res = await gapi.client.docs.documents.create({ resource: { title: 'Task Catcher — ' + mod.name } });
+    mod.docId = res.result.documentId;
+    await gapi.client.drive.files.update({ fileId: mod.docId, addParents: folderId, removeParents: 'root', fields: 'id,parents' });
+  }
+  const doc = await gapi.client.docs.documents.get({ documentId: mod.docId });
+  const content = doc.result.body.content || [];
+  const endIndex = content.length ? content[content.length - 1].endIndex : 1;
+  const requests = [];
+  if (endIndex > 2) requests.push({ deleteContentRange: { range: { startIndex: 1, endIndex: endIndex - 1 } } });
+  const parts = moduleRecords(mod.id).map(rec => {
+    const title = recordTitle(mod, rec);
+    const body = rec.notes || (mod.fields.map(f => f.label + ': ' + fieldValueForExport(f, rec)).join('\n'));
+    return title + '\n' + body;
+  });
+  const text = parts.length ? parts.join('\n\n---\n\n') + '\n' : '(no records yet)\n';
+  requests.push({ insertText: { location: { index: 1 }, text } });
+  await gapi.client.docs.documents.batchUpdate({ documentId: mod.docId, resource: { requests } });
+}
+
+async function syncModuleToCalendar(mod){
+  const df = dateField(mod);
+  if (!df) throw new Error('this module has no date field');
+  for (const rec of moduleRecords(mod.id)){
+    const dateVal = rec.fields[df.id];
+    if (!dateVal) continue;
+    const eventResource = {
+      summary: recordTitle(mod, rec),
+      description: rec.notes || '',
+      start: { date: dateVal },
+      end: { date: dateVal },
+    };
+    if (rec.calendarEventId){
+      await gapi.client.calendar.events.update({ calendarId: 'primary', eventId: rec.calendarEventId, resource: eventResource });
+    } else {
+      const res = await gapi.client.calendar.events.insert({ calendarId: 'primary', resource: eventResource });
+      rec.calendarEventId = res.result.id;
+    }
+  }
 }
 
 /* =========================================================
