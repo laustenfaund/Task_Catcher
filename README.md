@@ -94,11 +94,8 @@ cache instead of just a bookmark.
 1. Make sure this repo is public (Settings → Danger Zone → Change
    visibility), then enable GitHub Pages (Settings → Pages → Deploy from
    branch → `main` → `/` root).
-2. Once it's live, open `https://laustenfaund.github.io/Task_Catcher/`
-   on your phone — not the repo's `github.com` page. (The repo itself is
-   still named `Task_Catcher` on GitHub even though the app is now called
-   Note Goat — rename it under Settings → General if you want the URL to
-   match; this link will need updating to match whatever you rename it to.)
+2. Once it's live, open `https://laustenfaund.github.io/Note_Goat/`
+   on your phone — not the repo's `github.com` page.
 3. Use your browser's "Add to Home Screen" / "Install app" option.
 
 ## License
