@@ -8,41 +8,73 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg: #FAF8F5;
+  /* Interface panels — solid, calm, easy to read. The stripes live in the
+     page background only; nothing you have to read sits on top of them. */
+  --panel: #FFFCF5;
   --surface: #FFFFFF;
-  --surface-sunk: #F1EEE8;
+  --surface-sunk: #F3EEE1;
   --ink: #2B2A27;
   --ink-dim: #6E6A62;
   --ink-faint: #9A958A;
-  --line: #E6E1D8;
-  --line-strong: #D6CFC1;
-  --accent: #5D7D6E;
-  --accent-soft: rgba(93,125,110,0.12);
-  --accent-ink: #375147;
-  --warn: #B97A4E;
-  --warn-soft: rgba(185,122,78,0.14);
-  --danger: #A85149;
-  --danger-soft: rgba(168,81,73,0.1);
+  --line: #E9E2D2;
+  --line-strong: #DCD1B6;
+  --accent: #2C6E7E;
+  --accent-soft: rgba(44,110,126,0.12);
+  --accent-ink: #1F4E5A;
+  --warn: #A8843F;
+  --warn-soft: rgba(168,132,63,0.14);
+  --danger: #A13E63;
+  --danger-soft: rgba(161,62,99,0.1);
   --font: 'Inter', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', monospace;
   --radius: 10px;
+
+  /* Watercolor stripe palette — pulled from the reference swatch. Used for
+     the page background and, sparingly, for per-item type-color dots. */
+  --wc-1: #2FB4C2; /* turquoise */
+  --wc-2: #3E6FA6; /* blue */
+  --wc-3: #2C7A68; /* teal */
+  --wc-4: #A13E63; /* magenta */
+  --wc-5: #7C8A4A; /* olive */
+  --wc-6: #C39A52; /* gold */
 }
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;height:100%;}
 body{
-  background:var(--bg);
   color:var(--ink);
   font-family:var(--font);
   font-size:14px;
   line-height:1.5;
   min-height:100vh;
+  display:flex;
+  justify-content:center;
+  padding:22px;
+  background:
+    linear-gradient(rgba(255,255,255,0.32), rgba(255,255,255,0.32)),
+    url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27312%27%20height%3D%27400%27%20viewBox%3D%270%200%20312%20400%27%3E%0A%3Cfilter%20id%3D%27wc%27%20x%3D%27-15%25%27%20y%3D%27-10%25%27%20width%3D%27130%25%27%20height%3D%27120%25%27%3E%0A%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%270.012%200.009%27%20numOctaves%3D%272%27%20seed%3D%2711%27%20stitchTiles%3D%27stitch%27%20result%3D%27n%27%2F%3E%0A%3CfeDisplacementMap%20in%3D%27SourceGraphic%27%20in2%3D%27n%27%20scale%3D%2716%27%20xChannelSelector%3D%27R%27%20yChannelSelector%3D%27G%27%20result%3D%27disp%27%2F%3E%0A%3CfeGaussianBlur%20in%3D%27disp%27%20stdDeviation%3D%272.4%27%2F%3E%0A%3C%2Ffilter%3E%0A%3Cg%20filter%3D%27url%28%23wc%29%27%3E%0A%3Crect%20x%3D%27-10%27%20y%3D%270%27%20width%3D%27332%27%20height%3D%27400%27%20fill%3D%27%23FBF3E3%27%2F%3E%0A%3Crect%20x%3D%270%27%20%20%20y%3D%270%27%20width%3D%2726%27%20height%3D%27400%27%20fill%3D%27%232FB4C2%27%2F%3E%0A%3Crect%20x%3D%2730%27%20%20y%3D%270%27%20width%3D%2734%27%20height%3D%27400%27%20fill%3D%27%233E6FA6%27%2F%3E%0A%3Crect%20x%3D%2768%27%20%20y%3D%270%27%20width%3D%2728%27%20height%3D%27400%27%20fill%3D%27%232C7A68%27%2F%3E%0A%3Crect%20x%3D%27100%27%20y%3D%270%27%20width%3D%2722%27%20height%3D%27400%27%20fill%3D%27%23A13E63%27%2F%3E%0A%3Crect%20x%3D%27126%27%20y%3D%270%27%20width%3D%2724%27%20height%3D%27400%27%20fill%3D%27%237C8A4A%27%2F%3E%0A%3Crect%20x%3D%27154%27%20y%3D%270%27%20width%3D%2726%27%20height%3D%27400%27%20fill%3D%27%232FB4C2%27%2F%3E%0A%3Crect%20x%3D%27184%27%20y%3D%270%27%20width%3D%2736%27%20height%3D%27400%27%20fill%3D%27%23C39A52%27%2F%3E%0A%3Crect%20x%3D%27224%27%20y%3D%270%27%20width%3D%2730%27%20height%3D%27400%27%20fill%3D%27%233E6FA6%27%2F%3E%0A%3Crect%20x%3D%27258%27%20y%3D%270%27%20width%3D%2728%27%20height%3D%27400%27%20fill%3D%27%232C7A68%27%2F%3E%0A%3Crect%20x%3D%27290%27%20y%3D%270%27%20width%3D%2722%27%20height%3D%27400%27%20fill%3D%27%23A13E63%27%2F%3E%0A%3C%2Fg%3E%0A%3C%2Fsvg%3E")
+    repeat;
+  background-size: auto, 312px 400px;
+  background-attachment: fixed;
 }
 button{font-family:var(--font);cursor:pointer;}
 input,textarea,select{font-family:var(--font);font-size:14px;}
 h1,h2,h3{margin:0;}
 ::selection{background:var(--accent-soft);}
 
-.shell{display:flex;min-height:100vh;}
+/* The shell is the whole visible interface — one solid, legible panel
+   floating over the watercolor stripe field painted on <body>. The stripes
+   are the app's personality; nothing you have to read sits directly on
+   top of them. */
+.shell{
+  display:flex;
+  width:100%;max-width:1360px;
+  min-height:calc(100vh - 44px);
+  background:var(--panel);
+  border-radius:20px;
+  box-shadow:0 24px 60px rgba(35,30,20,0.16), 0 2px 8px rgba(35,30,20,0.06);
+  overflow:hidden;
+  align-self:flex-start;
+}
 
 /* ---------- Sidebar ---------- */
 .sidebar{
@@ -50,11 +82,23 @@ h1,h2,h3{margin:0;}
   background:var(--surface);
   border-right:1px solid var(--line);
   display:flex;flex-direction:column;
-  position:sticky;top:0;height:100vh;
 }
-.brand{padding:20px 18px 14px;}
-.brand-mark{font-size:17px;font-weight:700;letter-spacing:-0.01em;}
-.brand-sub{font-family:var(--font-mono);font-size:10px;color:var(--ink-faint);margin-top:3px;text-transform:uppercase;letter-spacing:0.06em;}
+.brand{padding:22px 18px 16px;position:relative;overflow:hidden;}
+.brand-watercolor{position:absolute;inset:0;background:
+    linear-gradient(rgba(255,255,255,0.18), rgba(255,255,255,0.18)),
+    url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27312%27%20height%3D%27400%27%20viewBox%3D%270%200%20312%20400%27%3E%0A%3Cfilter%20id%3D%27wc%27%20x%3D%27-15%25%27%20y%3D%27-10%25%27%20width%3D%27130%25%27%20height%3D%27120%25%27%3E%0A%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%270.012%200.009%27%20numOctaves%3D%272%27%20seed%3D%2711%27%20stitchTiles%3D%27stitch%27%20result%3D%27n%27%2F%3E%0A%3CfeDisplacementMap%20in%3D%27SourceGraphic%27%20in2%3D%27n%27%20scale%3D%2716%27%20xChannelSelector%3D%27R%27%20yChannelSelector%3D%27G%27%20result%3D%27disp%27%2F%3E%0A%3CfeGaussianBlur%20in%3D%27disp%27%20stdDeviation%3D%272.4%27%2F%3E%0A%3C%2Ffilter%3E%0A%3Cg%20filter%3D%27url%28%23wc%29%27%3E%0A%3Crect%20x%3D%27-10%27%20y%3D%270%27%20width%3D%27332%27%20height%3D%27400%27%20fill%3D%27%23FBF3E3%27%2F%3E%0A%3Crect%20x%3D%270%27%20%20%20y%3D%270%27%20width%3D%2726%27%20height%3D%27400%27%20fill%3D%27%232FB4C2%27%2F%3E%0A%3Crect%20x%3D%2730%27%20%20y%3D%270%27%20width%3D%2734%27%20height%3D%27400%27%20fill%3D%27%233E6FA6%27%2F%3E%0A%3Crect%20x%3D%2768%27%20%20y%3D%270%27%20width%3D%2728%27%20height%3D%27400%27%20fill%3D%27%232C7A68%27%2F%3E%0A%3Crect%20x%3D%27100%27%20y%3D%270%27%20width%3D%2722%27%20height%3D%27400%27%20fill%3D%27%23A13E63%27%2F%3E%0A%3Crect%20x%3D%27126%27%20y%3D%270%27%20width%3D%2724%27%20height%3D%27400%27%20fill%3D%27%237C8A4A%27%2F%3E%0A%3Crect%20x%3D%27154%27%20y%3D%270%27%20width%3D%2726%27%20height%3D%27400%27%20fill%3D%27%232FB4C2%27%2F%3E%0A%3Crect%20x%3D%27184%27%20y%3D%270%27%20width%3D%2736%27%20height%3D%27400%27%20fill%3D%27%23C39A52%27%2F%3E%0A%3Crect%20x%3D%27224%27%20y%3D%270%27%20width%3D%2730%27%20height%3D%27400%27%20fill%3D%27%233E6FA6%27%2F%3E%0A%3Crect%20x%3D%27258%27%20y%3D%270%27%20width%3D%2728%27%20height%3D%27400%27%20fill%3D%27%232C7A68%27%2F%3E%0A%3Crect%20x%3D%27290%27%20y%3D%270%27%20width%3D%2722%27%20height%3D%27400%27%20fill%3D%27%23A13E63%27%2F%3E%0A%3C%2Fg%3E%0A%3C%2Fsvg%3E")
+    repeat;
+  background-size:auto, 156px 200px;
+  opacity:0.85;
+}
+.brand-inner{position:relative;z-index:1;}
+.brand-mark{
+  font-size:17px;font-weight:700;letter-spacing:-0.01em;
+  background:rgba(255,252,245,0.82);backdrop-filter:blur(4px);
+  display:inline-block;padding:3px 9px;border-radius:7px;
+}
+.brand-sub{font-family:var(--font-mono);font-size:10px;color:var(--ink-dim);margin-top:5px;text-transform:uppercase;letter-spacing:0.06em;
+  background:rgba(255,252,245,0.82);display:inline-block;padding:2px 8px;border-radius:6px;}
 
 .nav-section{padding:6px 10px;}
 .nav-btn{
@@ -64,7 +108,7 @@ h1,h2,h3{margin:0;}
 }
 .nav-btn:hover{background:var(--surface-sunk);color:var(--ink);}
 .nav-btn.active{background:var(--accent-soft);color:var(--accent-ink);font-weight:600;}
-.nav-btn .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--ink-faint);}
+.nav-btn .dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--ink-faint);}
 
 nav.module-list{flex:1;overflow-y:auto;padding:8px 10px;}
 .nav-label{font-family:var(--font-mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:0.06em;padding:10px 10px 4px;}
@@ -84,7 +128,7 @@ nav.module-list{flex:1;overflow-y:auto;padding:8px 10px;}
 .btn-library:hover{border-color:var(--accent);color:var(--accent-ink);}
 
 /* ---------- Main ---------- */
-.main{flex:1;min-width:0;padding:28px 34px 60px;max-width:960px;}
+.main{flex:1;min-width:0;padding:28px 34px 60px;max-width:960px;background:var(--panel);overflow-y:auto;}
 .page-title{font-size:22px;font-weight:700;margin-bottom:2px;}
 .page-sub{color:var(--ink-dim);font-size:13px;margin-bottom:22px;}
 
@@ -111,7 +155,7 @@ nav.module-list{flex:1;overflow-y:auto;padding:8px 10px;}
 
 .item-row{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line);}
 .item-row:last-child{border-bottom:none;}
-.item-row .type-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--ink-faint);}
+.type-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--ink-faint);}
 .item-row .item-main{flex:1;min-width:0;cursor:pointer;}
 .item-row .item-title{font-size:13.5px;font-weight:500;}
 .item-row .item-meta{font-size:11.5px;color:var(--ink-dim);}
@@ -246,8 +290,11 @@ table.record-table td.actions{white-space:nowrap;width:1%;}
 <div class="shell">
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark">Task Catcher</div>
-      <div class="brand-sub">local &amp; private</div>
+      <div class="brand-watercolor"></div>
+      <div class="brand-inner">
+        <div class="brand-mark">Task Catcher</div>
+        <div class="brand-sub">local &amp; private</div>
+      </div>
     </div>
     <div class="nav-section">
       <button class="nav-btn" id="homeNavBtn"><span class="dot"></span>Home</button>
@@ -400,7 +447,7 @@ function renderSidebar(){
     row.className = 'module-row' + (state.view.type === 'module' && state.view.moduleId === mod.id ? ' active' : '');
     const btn = document.createElement('button');
     btn.className = 'nav-btn';
-    btn.innerHTML = '<span class="dot"></span>' + escapeHtml(mod.name);
+    btn.innerHTML = '<span class="dot" style="background:' + colorForKey(mod.name) + '"></span>' + escapeHtml(mod.name);
     btn.onclick = () => { state.view = {type:'module', moduleId: mod.id}; render(); };
     const gear = document.createElement('button');
     gear.className = 'gear'; gear.title = 'Edit module'; gear.textContent = '⚙';
@@ -527,6 +574,10 @@ function renderNextStepsCard(){
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!rec.fields.done;
       cb.onchange = () => { rec.fields.done = cb.checked; rec.updatedAt = Date.now(); render(); };
       row.appendChild(cb);
+      const dot = el('span', 'type-dot', '');
+      dot.style.background = colorForKey(rec.fields.group || mod.name);
+      dot.style.display = 'inline-block';
+      row.appendChild(dot);
       const titleSpan = el('span', 'cl-title', recordTitle(mod, rec));
       titleSpan.style.cursor='pointer';
       titleSpan.onclick = () => openRecordModal(mod, rec);
@@ -1040,6 +1091,13 @@ function el(tag, cls, text){
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const WC_PALETTE = ['var(--wc-1)','var(--wc-2)','var(--wc-3)','var(--wc-4)','var(--wc-5)','var(--wc-6)'];
+function colorForKey(str){
+  const s = String(str || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return WC_PALETTE[h % WC_PALETTE.length];
 }
 function formatDate(iso){
   if (!iso) return '';
