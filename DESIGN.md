@@ -1,4 +1,4 @@
-# Task Catcher — design notes
+# Note Goat — design notes
 
 This document exists so the shape of the app doesn't have to be re-derived
 from memory later, and so future changes can be checked against the
@@ -282,7 +282,7 @@ rather than as a generic proof of the module system:
 
 A deliberate departure from PM and Archive Mole, both of which accept "no
 export/backup, `localStorage` is the only copy" as a known risk rather than
-solving it. Task Catcher's single-person, cross-device use (one person's
+solving it. Note Goat's single-person, cross-device use (one person's
 own laptop and phone, no account, no server) makes that risk worth actually
 addressing rather than inheriting by default.
 

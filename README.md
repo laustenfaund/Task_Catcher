@@ -1,8 +1,8 @@
-# Task Catcher
+# Note Goat
 
 A single-file, browser-only, domain-agnostic personal organizer. Where
 [Project Manager](https://github.com/laustenfaund/ProjectManager) tracks one
-kind of thing (construction projects) with a fixed set of tabs, Task Catcher
+kind of thing (construction projects) with a fixed set of tabs, Note Goat
 is built for whatever a person actually needs organized — appointments,
 doctors, medications, tasks, notes, or anything else — through user-named
 modules instead of a fixed structure.
@@ -67,7 +67,7 @@ feature.
   AI-cleaned text; this keeps the actual file, on purpose, no AI involved.
 - **Manual** — 📖 Manual (sidebar) opens a full walkthrough of every
   feature, same pattern as U/I's and Archive Mole's manuals, styled to
-  match Task Catcher's own colors.
+  match Note Goat's own colors.
 
 Phase 5 is complete.
 
@@ -94,7 +94,7 @@ cache instead of just a bookmark.
 1. Make sure this repo is public (Settings → Danger Zone → Change
    visibility), then enable GitHub Pages (Settings → Pages → Deploy from
    branch → `main` → `/` root).
-2. Once it's live, open `https://<your-username>.github.io/Task_Catcher/`
+2. Once it's live, open `https://<your-username>.github.io/Note_Goat/`
    on your phone — not the repo's `github.com` page.
 3. Use your browser's "Add to Home Screen" / "Install app" option.
 

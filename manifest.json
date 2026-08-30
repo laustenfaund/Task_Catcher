@@ -1,6 +1,6 @@
 {
-  "name": "Task Catcher",
-  "short_name": "Task Catcher",
+  "name": "Note Goat",
+  "short_name": "Note Goat",
   "description": "A single-file, browser-only, domain-agnostic personal organizer.",
   "start_url": "./index.html",
   "scope": "./",
