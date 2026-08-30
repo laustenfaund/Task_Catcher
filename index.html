@@ -2360,6 +2360,19 @@ footer{margin-top:20px;padding-top:20px;border-top:1px solid var(--line);color:v
     </main>
   </div>
 </div>
+<script>
+  // Handle TOC clicks ourselves instead of native #hash navigation — inside
+  // a srcdoc iframe, native anchor-jumps can resolve against the parent
+  // page's URL instead of this document, which can end up loading the real
+  // app into this iframe instead of just scrolling to the section.
+  document.querySelectorAll('.toc a[href^="#"]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const target = document.getElementById(a.getAttribute('href').slice(1));
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+<\/script>
 </body></html>`;
 
 /* =========================================================
