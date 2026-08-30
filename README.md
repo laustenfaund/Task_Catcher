@@ -53,9 +53,8 @@ feature.
   Google sign-in itself doesn't persist across a reload, same as Project
   Manager.
 
-**Not yet built:** Phase 5 — Drive file/photo-reference modules, and PWA
-install files (manifest/service worker/icons) so the app installs like a
-real app on a phone.
+**Not yet built:** Drive file/photo-reference modules — the last open piece
+of Phase 5.
 
 ## Storage & privacy model
 
@@ -69,6 +68,20 @@ keys you supply under Connections. Nothing routes through a server of ours.
 
 Download `index.html` (or clone this repo) and open it directly in a
 browser. No build step, no install.
+
+## Installing on your phone
+
+`manifest.json`, `sw.js`, and `icons/` make this app installable as a PWA
+once hosted somewhere over `https://` (e.g. GitHub Pages) — a real app
+icon (the watercolor stripe motif), a name, and a minimal offline shell
+cache instead of just a bookmark.
+
+1. Make sure this repo is public (Settings → Danger Zone → Change
+   visibility), then enable GitHub Pages (Settings → Pages → Deploy from
+   branch → `main` → `/` root).
+2. Once it's live, open `https://<your-username>.github.io/Task_Catcher/`
+   on your phone — not the repo's `github.com` page.
+3. Use your browser's "Add to Home Screen" / "Install app" option.
 
 ## License
 
