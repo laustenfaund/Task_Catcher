@@ -98,6 +98,25 @@ cache instead of just a bookmark.
    on your phone — not the repo's `github.com` page.
 3. Use your browser's "Add to Home Screen" / "Install app" option.
 
+## The hosted variant
+
+[`hosted/`](hosted) is a clone of this same app with one change: instead of
+each person pasting in their own Anthropic API key, AI capture and
+AI-assisted module setup are gated by a passcode and routed through a
+small proxy (in [`worker/`](worker)) that holds a single shared key
+server-side, with hard per-person and total spending caps enforced before
+any request goes out. Use this if you want to give a few people access to
+the AI features without also giving them your API key.
+
+This only covers the Anthropic connection — Google sync still needs each
+person's own Google Cloud project and OAuth credentials in `hosted/`, same
+as the plain version. Sync writes to *that person's own* Google account,
+not a shared one, so there's no equivalent "use my Google connection"
+version of that feature the way there is for the Anthropic key.
+
+See [`worker/README.md`](worker/README.md) to deploy the proxy; the UI is
+otherwise identical to the plain version above.
+
 ## License
 
 All rights reserved — see [`LICENSE`](LICENSE). Shared for personal
