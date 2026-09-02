@@ -47,12 +47,14 @@
 //    this wrong in the "too cheap" direction means the cap enforces less
 //    protection than you think.
 
-// Dollars per million tokens. PLACEHOLDER — verify against your own
-// Anthropic console before relying on the cap below. Note Goat only ever
-// asks for claude-sonnet-5 (no model picker in the app), so that's the
-// only entry needed here.
+// Dollars per million tokens. Verified against Anthropic's published
+// pricing (docs.claude.com/en/docs/about-claude/pricing) as of this
+// writing — rates can change, so recheck there if the cap below ever
+// seems to be tripping at the wrong point. Note Goat only ever asks for
+// claude-sonnet-5 (no model picker in the app), so that's the only entry
+// needed here.
 const PRICING = {
-  'claude-sonnet-5': { in: 3, out: 15 },
+  'claude-sonnet-5': { in: 2, out: 10 },
 };
 const ALLOWED_MODELS = Object.keys(PRICING);
 
