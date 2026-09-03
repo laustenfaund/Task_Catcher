@@ -1933,7 +1933,7 @@ function tryInitGoogle(promptSignIn, onConnected, onFailed, _attempt){
 // This does not go to api.anthropic.com directly. It goes to a Cloudflare
 // Worker that holds the real Anthropic key server-side, checks the
 // passcode below, and enforces spending caps before forwarding on.
-const ASSISTANT_PROXY_URL = 'https://REPLACE-WITH-YOUR-WORKER.workers.dev';
+const ASSISTANT_PROXY_URL = 'https://note-goat-assistant.laustenfaund.workers.dev';
 const CLAUDE_API_URL = ASSISTANT_PROXY_URL + '/v1/messages';
 async function callClaude({ system, userContent, maxTokens }){
   if (!state.settings.anthropicKey) throw new Error('NO_KEY');
