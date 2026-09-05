@@ -359,6 +359,7 @@ const FIELD_TYPES = {
   text:      { label: 'Short text' },
   longtext:  { label: 'Long text' },
   date:      { label: 'Date' },
+  time:      { label: 'Time' },
   number:    { label: 'Number' },
   select:    { label: 'Choice list' },
   checkbox:  { label: 'Checkbox' },
@@ -393,6 +394,13 @@ const SYNC_WARN_MESSAGES = {
 };
 const SYNC_TARGET_LABELS = { sheets:'Google Sheets', docx:'Google Docs', calendar:'Google Calendar' };
 
+/* Calendar reminder defaults, in minutes before the event start. An
+   all-day event's "start" is midnight, so 900 lands the popup at 9am the
+   day before; a timed event's start is the actual time, so 24h before
+   reads naturally instead. */
+const CALENDAR_REMINDER_MINUTES_ALLDAY = 900;
+const CALENDAR_REMINDER_MINUTES_TIMED = 1440;
+
 function uid(prefix){ return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
 // Templates shown in the Library. `role` (optional) wires a template's
@@ -415,7 +423,7 @@ const MEDICAL_TEMPLATES = [
              {id:'phone',label:'Phone',type:'text'}, {id:'address',label:'Address',type:'text'} ] },
   { group:'Medical', name:'Appointments', shape:'event',
     fields:[ {id:'title',label:'Reason',type:'text'}, {id:'doctor',label:'Doctor',type:'text'},
-             {id:'date',label:'Date',type:'date'}, {id:'time',label:'Time',type:'text'} ] },
+             {id:'date',label:'Date',type:'date'}, {id:'time',label:'Time',type:'time'} ] },
   { group:'Medical', name:'Referrals', shape:'table',
     fields:[ {id:'toDoctor',label:'Referred to',type:'text'}, {id:'fromDoctor',label:'Referred by',type:'text'},
              {id:'reason',label:'Reason',type:'text'}, {id:'status',label:'Status',type:'select',options:['Pending','Scheduled','Completed']} ] },
@@ -557,6 +565,7 @@ function recordTitle(mod, rec){
   return '(untitled)';
 }
 function dateField(mod){ return mod.fields.find(f => f.type === 'date') || null; }
+function timeField(mod){ return mod.fields.find(f => f.type === 'time') || null; }
 
 /* ---------- Links & backlinks ----------
    A link field's value is a record id (link-one) or array of record ids
@@ -1186,7 +1195,7 @@ function openAIModuleDialog(){
   ]);
 }
 
-const AI_FIELD_TYPE_NAMES = 'text (short text), longtext (long text), date, number, select (choice list), checkbox, link-one (links to one record in another module), link-many (links to several records in another module)';
+const AI_FIELD_TYPE_NAMES = 'text (short text), longtext (long text), date, time, number, select (choice list), checkbox, link-one (links to one record in another module), link-many (links to several records in another module)';
 
 async function proposeModuleFromAI(description){
   const moduleNames = state.modules.map(m => m.name);
@@ -1347,12 +1356,13 @@ function openSchemaModal(mod, prefill){
       const badValues = [];
       const wasLink = FIELD_TYPES[f.type] && FIELD_TYPES[f.type].isLink;
       const willBeLink = FIELD_TYPES[newType] && FIELD_TYPES[newType].isLink;
-      if (newType === 'number' || newType === 'date'){
+      if (newType === 'number' || newType === 'date' || newType === 'time'){
         recs.forEach(r => {
           const v = r.fields[f.id];
           if (v === undefined || v === '' || v === null) return;
           if (newType === 'number' && isNaN(Number(v))) badValues.push({r, v});
           if (newType === 'date' && isNaN(Date.parse(v))) badValues.push({r, v});
+          if (newType === 'time' && !/^\d{2}:\d{2}$/.test(v)) badValues.push({r, v});
         });
       }
       if (willBeLink && !wasLink){
@@ -1533,6 +1543,10 @@ function openRecordModal(mod, rec){
         input.onchange = () => draft.fields[f.id] = input.checked;
       } else if (f.type === 'date'){
         input = document.createElement('input'); input.type = 'date';
+        input.value = draft.fields[f.id] || '';
+        input.oninput = () => draft.fields[f.id] = input.value;
+      } else if (f.type === 'time'){
+        input = document.createElement('input'); input.type = 'time';
         input.value = draft.fields[f.id] || '';
         input.oninput = () => draft.fields[f.id] = input.value;
       } else if (f.type === 'number'){
@@ -1984,6 +1998,17 @@ function openSyncModal(mod){
       } else {
         info.appendChild(el('div', 'field-hint', 'A natural fit for this module\'s shape.'));
       }
+      if (target === 'calendar' && rule !== 'refuse'){
+        const remLabel = document.createElement('label');
+        remLabel.style.display = 'flex'; remLabel.style.alignItems = 'center'; remLabel.style.gap = '6px';
+        remLabel.style.marginTop = '6px'; remLabel.style.fontSize = '13.5px';
+        const remCb = document.createElement('input'); remCb.type = 'checkbox'; remCb.style.width = 'auto';
+        remCb.checked = mod.calendarReminder !== false;
+        remCb.onchange = () => { mod.calendarReminder = remCb.checked; saveState(); };
+        remLabel.appendChild(remCb);
+        remLabel.appendChild(document.createTextNode('Reminder — 9am the day before (all-day events) or 24h before (timed events)'));
+        info.appendChild(remLabel);
+      }
       row.appendChild(info);
       const btn = document.createElement('button');
       btn.className = 'btn ' + (rule === 'refuse' ? 'btn-secondary' : 'btn-primary');
@@ -2102,18 +2127,57 @@ async function syncModuleToDocx(mod){
   await gapi.client.docs.documents.batchUpdate({ documentId: mod.docId, resource: { requests } });
 }
 
+// A "local" YYYY-MM-DDTHH:MM:SS string (no offset/Z) for a date+time
+// that's `hours` after dateVal/timeVal, read back using the wall-clock
+// components — the timeZone field on the request is what pins it to a
+// real instant, not this string.
+function addHoursToLocalDateTime(dateVal, timeVal, hours){
+  const [y, mo, d] = dateVal.split('-').map(Number);
+  const [h, mi] = timeVal.split(':').map(Number);
+  const dt = new Date(y, mo - 1, d, h, mi, 0);
+  dt.setHours(dt.getHours() + hours);
+  const pad = n => String(n).padStart(2, '0');
+  return dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()) +
+    'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes()) + ':00';
+}
+
 async function syncModuleToCalendar(mod){
   const df = dateField(mod);
   if (!df) throw new Error('this module has no date field');
+  const tf = timeField(mod);
   for (const rec of moduleRecords(mod.id)){
     const dateVal = rec.fields[df.id];
     if (!dateVal) continue;
-    const eventResource = {
-      summary: recordTitle(mod, rec),
-      description: rec.notes || '',
-      start: { date: dateVal },
-      end: { date: dateVal },
-    };
+    const timeVal = tf ? rec.fields[tf.id] : '';
+    let eventResource;
+    if (timeVal){
+      // Has a time of day too — push as a timed, 1-hour event instead of
+      // all-day, in the browser's own timezone.
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      eventResource = {
+        summary: recordTitle(mod, rec),
+        description: rec.notes || '',
+        start: { dateTime: dateVal + 'T' + timeVal + ':00', timeZone },
+        end: { dateTime: addHoursToLocalDateTime(dateVal, timeVal, 1), timeZone },
+      };
+    } else {
+      // Date only — keep the existing all-day behavior.
+      eventResource = {
+        summary: recordTitle(mod, rec),
+        description: rec.notes || '',
+        start: { date: dateVal },
+        end: { date: dateVal },
+      };
+    }
+    // Reminder minutes are measured from event start, so a timed event
+    // (start = the actual time) needs a longer lead than an all-day one
+    // (start = midnight) to land at a sensible moment.
+    if (mod.calendarReminder !== false){
+      eventResource.reminders = {
+        useDefault: false,
+        overrides: [{ method: 'popup', minutes: timeVal ? CALENDAR_REMINDER_MINUTES_TIMED : CALENDAR_REMINDER_MINUTES_ALLDAY }],
+      };
+    }
     if (rec.calendarEventId){
       await gapi.client.calendar.events.update({ calendarId: 'primary', eventId: rec.calendarEventId, resource: eventResource });
     } else {
@@ -2313,6 +2377,8 @@ footer{margin-top:20px;padding-top:20px;border-top:1px solid var(--line);color:v
         <h2>Sync</h2>
         <p>Open a module and click <b>Sync</b> to push it to Google Sheets, Docs, or Calendar — one-way only, on demand. Nothing is ever read back from Google; editing something on the Google side won't reflect back here.</p>
         <p>Which targets are offered depends on the module's shape: a natural fit (a table to Sheets, a dated module to Calendar) syncs straight away; a workable-but-lossy fit (a checklist to Sheets, say) asks you to confirm first and says exactly what will be lost; anything that wouldn't make sense at all (files, or anything without a date, to Calendar) isn't offered, with a reason shown. Needs your own Google Cloud project, connected under Settings.</p>
+        <p>Calendar sync adds a popup reminder to every event it pushes — 9am the day before for an all-day event (a Date field only), or 24 hours before for a timed one (see below). It's on by default; the <b>Reminder</b> checkbox next to Google Calendar in this Sync screen turns it off for this module, remembered from then on.</p>
+        <p>A dated/scheduled module can add an optional <b>Time</b> field alongside its Date field. Fill one in on a record and that record syncs as a real 1-hour timed event instead of all-day, in your browser's own timezone; records with no time keep syncing all-day, unchanged.</p>
       </section>
 
       <section id="settings">
