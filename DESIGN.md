@@ -154,6 +154,22 @@ reads back from Google Calendar; an office rescheduling something there
 doesn't reflect in the app, same tradeoff PM already made and documented
 for Sheets.
 
+Pushed events carry an explicit popup reminder (`useDefault: false`) rather
+than falling back on whatever default the calendar happens to have — 9am
+the day before for an all-day event (900 minutes before midnight), or 24
+hours before for a timed one, since reminder minutes count back from event
+start and a timed start needs the longer lead to still read as "the day
+before." It's a per-module setting, stored on the module object the same
+way `docId` is, defaulting to on so existing modules get it without
+migration; the Sync screen's Reminder checkbox flips it per module.
+
+A dated/scheduled-event module's Date field can be paired with an optional
+**Time** field. A record with both pushes as a real timed event
+(`start`/`end` as `{ dateTime, timeZone }`, one hour long, in the browser's
+own timezone) instead of all-day; a record with only a date keeps pushing
+all-day, unchanged — adding a Time field is additive and never breaks
+existing records or already-synced events.
+
 ## Links between modules
 
 The one thing with no precedent anywhere in the existing family — PM's
